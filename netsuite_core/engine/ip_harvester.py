@@ -32,13 +32,20 @@ def extract_part_category(title: str) -> str:
     return "Other/Misc"
 
 def _get_db_connection():
-    """Securely connects to DigitalOcean using the Streamlit secrets file."""
-    if not os.path.exists(SECRETS_PATH):
-        raise FileNotFoundError(f"Could not find secrets.toml at {SECRETS_PATH}. Database connection aborted.")
+    """Securely connects to DigitalOcean using Cloud Environment Variables."""
+    db_url = os.environ.get("DATABASE_URL")
     
-    with open(SECRETS_PATH, "r") as f:
-        secrets = toml.load(f)
-    db_url = secrets.get("DATABASE_URL")
+    # Fallback for local Streamlit testing if env var isn't set
+    if not db_url:
+        if os.path.exists(SECRETS_PATH):
+            import toml
+            with open(SECRETS_PATH, "r") as f:
+                secrets = toml.load(f)g
+            db_url = secrets.get("DATABASE_URL")
+            
+    if not db_url:
+        raise ValueError("DATABASE_URL environment variable is missing. Vault connection aborted.")
+        
     return psycopg2.connect(db_url)
 
 def is_valid_uuid(val):
