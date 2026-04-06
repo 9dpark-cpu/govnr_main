@@ -14,5 +14,5 @@ COPY . .
 # Expose the exact port DigitalOcean requires
 EXPOSE 8080
 
-# The deterministic run command
+# The deterministic run command (WITH THE REQUIRED SPACE)
 CMD["streamlit", "run", "app.py", "--server.port", "8080", "--server.address", "0.0.0.0"]
