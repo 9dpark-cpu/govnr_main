@@ -1,3 +1,4 @@
+import os
 import bcrypt
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -5,9 +6,18 @@ import streamlit as st
 import json
 from datetime import date
 
+
+def _database_url() -> str:
+    """Prefer DATABASE_URL from the environment (e.g. DigitalOcean App Platform), then Streamlit secrets."""
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        return url
+    return st.secrets["DATABASE_URL"]
+
+
 def get_db_connection():
     return psycopg2.connect(
-        st.secrets["DATABASE_URL"],
+        _database_url(),
         cursor_factory=RealDictCursor
     )
 
