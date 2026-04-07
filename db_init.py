@@ -77,6 +77,9 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    cursor.execute("ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS sftp_password_env_var VARCHAR(255);")
+    cursor.execute("ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS sftp_private_key_env_var VARCHAR(255);")
+    cursor.execute("ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS max_file_size_mb INTEGER DEFAULT 150;")
 
     # 5. Ingestion run ledger (idempotency + observability)
     cursor.execute("""
@@ -91,6 +94,7 @@ def init_db():
             UNIQUE(client_uuid, file_name, file_hash)
         );
     """)
+    cursor.execute("ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'sftp';")
 
     conn.commit()
     cursor.close()
