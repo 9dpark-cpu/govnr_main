@@ -18,7 +18,11 @@ NETSUITE_DIR = os.path.join(BASE_DIR, "netsuite_core")
 if NETSUITE_DIR not in sys.path:
     sys.path.insert(0, NETSUITE_DIR)
 
-st.set_page_config(page_title="Govnr | CFO Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Govnr | CFO Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -532,6 +536,7 @@ def main_dashboard():
     app_mode = st.sidebar.selectbox(
         "Select Module",
         ["Welcome", "Executive Dashboard", "ERP Data Health Scan", "Enterprise Ingestion Admin"],
+        key="govnr_nav_module",
     )
 
     if app_mode == "Welcome":

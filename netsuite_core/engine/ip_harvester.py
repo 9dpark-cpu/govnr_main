@@ -38,7 +38,6 @@ def _get_db_connection():
     # Fallback for local Streamlit testing if env var isn't set
     if not db_url:
         if os.path.exists(SECRETS_PATH):
-            import toml
             with open(SECRETS_PATH, "r") as f:
                 secrets = toml.load(f)
             db_url = secrets.get("DATABASE_URL")
