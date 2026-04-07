@@ -1,0 +1,6 @@
+# Normalize line endings; GitHub and Linux builds expect plain UTF-8 text
+* text=auto eol=lf
+
+requirements.txt text eol=lf
+*.py text eol=lf
+*.md text eol=lf
