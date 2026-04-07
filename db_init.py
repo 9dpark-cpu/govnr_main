@@ -58,6 +58,40 @@ def init_db():
         );
     """)
 
+    # 4. SFTP Ingestion Config (Enterprise auto-ingestion)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS client_ingestion_config (
+            id SERIAL PRIMARY KEY,
+            client_uuid UUID REFERENCES clients(client_uuid) UNIQUE,
+            enabled BOOLEAN DEFAULT FALSE,
+            sftp_host VARCHAR(255) NOT NULL,
+            sftp_port INTEGER DEFAULT 22,
+            sftp_username VARCHAR(255) NOT NULL,
+            sftp_password VARCHAR(255),
+            sftp_inbound_path VARCHAR(255) DEFAULT '/inbound',
+            inventory_filename_pattern VARCHAR(255) DEFAULT 'inventory_snapshot',
+            po_filename_pattern VARCHAR(255) DEFAULT 'po_activity',
+            delete_remote_after_success BOOLEAN DEFAULT FALSE,
+            proxy_cash NUMERIC(15, 2) DEFAULT 35000.00,
+            proxy_ap NUMERIC(15, 2) DEFAULT 28000.00,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # 5. Ingestion run ledger (idempotency + observability)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ingestion_runs (
+            id SERIAL PRIMARY KEY,
+            client_uuid UUID REFERENCES clients(client_uuid),
+            file_name VARCHAR(255) NOT NULL,
+            file_hash VARCHAR(64) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            error_message TEXT,
+            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(client_uuid, file_name, file_hash)
+        );
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
