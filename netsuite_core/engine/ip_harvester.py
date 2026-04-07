@@ -40,7 +40,7 @@ def _get_db_connection():
         if os.path.exists(SECRETS_PATH):
             import toml
             with open(SECRETS_PATH, "r") as f:
-                secrets = toml.load(f)g
+                secrets = toml.load(f)
             db_url = secrets.get("DATABASE_URL")
             
     if not db_url:
