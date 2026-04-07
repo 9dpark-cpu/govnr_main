@@ -6,6 +6,8 @@ import streamlit as st
 import json
 from datetime import date
 
+from enterprise_ingestion_schema import apply_enterprise_ingestion_schema
+
 
 def _database_url() -> str:
     """Prefer DATABASE_URL from the environment (e.g. DigitalOcean App Platform), then Streamlit secrets."""
@@ -22,6 +24,38 @@ def get_db_connection():
         connect_timeout=15,
         cursor_factory=RealDictCursor,
     )
+
+
+def enterprise_ingestion_tables_exist() -> bool:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'client_ingestion_config'
+            LIMIT 1
+            """
+        )
+        return cursor.fetchone() is not None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def ensure_enterprise_ingestion_tables() -> None:
+    """Idempotent: create client_ingestion_config + ingestion_runs (and columns) if missing."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        apply_enterprise_ingestion_schema(cursor)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')

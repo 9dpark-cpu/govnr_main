@@ -222,6 +222,20 @@ def enterprise_ingestion_admin_page():
     st.title("Enterprise Ingestion Admin")
     st.caption("Configure SFTP ingestion settings for the authenticated client and review recent ingestion runs.")
 
+    if not auth.enterprise_ingestion_tables_exist():
+        st.warning(
+            "The database does not have the enterprise ingestion tables yet. This is normal for databases "
+            "created before SFTP automation was added. Run the one-time setup below (safe to run more than once)."
+        )
+        if st.button("Create enterprise ingestion tables (one-time)", key="btn_ensure_ingestion_schema"):
+            try:
+                auth.ensure_enterprise_ingestion_tables()
+                st.success("Tables created. Reloading this page.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Migration failed: {e}")
+        st.stop()
+
     client_uuid = st.session_state["client_uuid"]
 
     conn = auth.get_db_connection()
