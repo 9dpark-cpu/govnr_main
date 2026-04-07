@@ -113,3 +113,10 @@ Example:
 - Keep clients in chroot jail (`/var/sftp/%u`).
 - Prefer SSH keys over passwords when ready.
 - Restrict Droplet firewall to required ingress only.
+
+## 8) Admin UI: test and dry run
+
+In the Streamlit app, open **Enterprise Ingestion Admin**:
+
+- **Test SFTP Connection** — non-destructive login + list inbound folder.
+- **Dry Run Ingestion (latest files)** — downloads newest matching CSVs to local inbound, runs the Govnr pipeline, **does not delete** remote files. A row with `status=dry_run` is written to `ingestion_runs`. The math engine may still update database metrics like a normal run.

@@ -3,8 +3,12 @@ import os
 import sys
 import io
 import json
+import hashlib
+import stat
+from typing import Optional
 from contextlib import redirect_stdout
 import polars as pl
+import paramiko
 import auth
 import pandas as pd
 
@@ -157,6 +161,57 @@ def safe_polars_rename(df, mapping_dict):
         df = df.rename(collision_renames)
         
     return df.rename(valid_rename)
+
+
+def _load_private_key_from_env(env_var_name: str):
+    key_data = os.getenv(env_var_name or "", "").strip()
+    if not key_data:
+        return None
+    key_data = key_data.replace("\\n", "\n")
+    for key_cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            return key_cls.from_private_key(io.StringIO(key_data))
+        except Exception:
+            continue
+    raise ValueError(f"Invalid private key in environment variable '{env_var_name}'.")
+
+
+def _sftp_newest_csv_name(sftp, inbound_path: str, pattern: str):
+    """Return filename of newest .csv in inbound_path whose name contains pattern (matches sftp_watcher)."""
+    candidates = []
+    for entry in sftp.listdir_attr(inbound_path):
+        if not stat.S_ISREG(entry.st_mode):
+            continue
+        name_lower = entry.filename.lower()
+        if pattern.lower() in name_lower and name_lower.endswith(".csv"):
+            candidates.append((entry.st_mtime, entry.filename))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+def _log_ingestion_run_row(client_uuid: str, file_name: str, file_hash: str, status: str, error_message: Optional[str] = None):
+    conn = auth.get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO ingestion_runs (client_uuid, file_name, file_hash, status, error_message, source)
+            VALUES (%s, %s, %s, %s, %s, 'admin_ui')
+            ON CONFLICT (client_uuid, file_name, file_hash)
+            DO UPDATE SET
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                processed_at = CURRENT_TIMESTAMP,
+                source = EXCLUDED.source
+            """,
+            (client_uuid, file_name, file_hash, status, error_message),
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def enterprise_ingestion_admin_page():
@@ -321,6 +376,123 @@ def enterprise_ingestion_admin_page():
                 finally:
                     cursor.close()
                     conn.close()
+
+    st.markdown("---")
+    st.subheader("Connection Test")
+    if st.button("Test SFTP Connection", key="btn_test_sftp_connection"):
+        if not sftp_host or not sftp_username:
+            st.error("Set SFTP Host and SFTP Username first.")
+        elif not sftp_password_env_var and not sftp_private_key_env_var:
+            st.error("Set at least one credential env var name before testing.")
+        else:
+            try:
+                with st.spinner("Testing SFTP connectivity..."):
+                    password = os.getenv((sftp_password_env_var or "").strip()) if sftp_password_env_var else None
+                    pkey = _load_private_key_from_env((sftp_private_key_env_var or "").strip()) if sftp_private_key_env_var else None
+                    transport = paramiko.Transport((sftp_host.strip(), int(sftp_port)))
+                    transport.connect(username=sftp_username.strip(), password=password, pkey=pkey)
+                    sftp = paramiko.SFTPClient.from_transport(transport)
+                    _ = sftp.listdir((sftp_inbound_path or "/inbound").strip())
+                    sftp.close()
+                    transport.close()
+                st.success("SFTP connection successful and inbound path is readable.")
+            except Exception as e:
+                st.error(f"SFTP test failed: {e}")
+
+    st.markdown("---")
+    st.subheader("Dry run (latest files, no remote delete)")
+    st.caption(
+        "Downloads the newest inventory and (if present) PO CSVs from SFTP into the local inbound folder and runs the "
+        "Govnr pipeline. Remote files are never deleted. The pipeline may still write metrics to the database like a "
+        "normal run."
+    )
+    if st.button("Dry Run Ingestion (latest files)", key="btn_dry_run_ingestion"):
+        if not sftp_host or not sftp_username:
+            st.error("Set SFTP Host and SFTP Username first.")
+        elif not sftp_password_env_var and not sftp_private_key_env_var:
+            st.error("Set at least one credential env var name before running.")
+        else:
+            inv_pat = (inventory_pattern or "inventory_snapshot").strip()
+            po_pat = (po_pattern or "po_activity").strip()
+            inbound = (sftp_inbound_path or "/inbound").strip()
+            max_bytes = int(max_file_size_mb) * 1024 * 1024
+            transport = None
+            sftp = None
+            try:
+                with st.spinner("Downloading from SFTP and running Govnr pipeline..."):
+                    password = os.getenv((sftp_password_env_var or "").strip()) if sftp_password_env_var else None
+                    pkey = _load_private_key_from_env((sftp_private_key_env_var or "").strip()) if sftp_private_key_env_var else None
+                    transport = paramiko.Transport((sftp_host.strip(), int(sftp_port)))
+                    transport.connect(username=sftp_username.strip(), password=password, pkey=pkey)
+                    sftp = paramiko.SFTPClient.from_transport(transport)
+
+                    inv_file = _sftp_newest_csv_name(sftp, inbound, inv_pat)
+                    if not inv_file:
+                        st.error(f"No inventory CSV found in {inbound} matching pattern “{inv_pat}”.")
+                    else:
+                        inv_remote = f"{inbound.rstrip('/')}/{inv_file}"
+                        with sftp.file(inv_remote, "rb") as rf:
+                            inv_bytes = rf.read()
+                        if len(inv_bytes) > max_bytes:
+                            st.error(f"Inventory file exceeds max size ({max_file_size_mb} MB).")
+                        else:
+                            inv_hash = hashlib.sha256(inv_bytes).hexdigest()
+                            inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
+                            os.makedirs(inbound_dir, exist_ok=True)
+                            inv_local = os.path.join(inbound_dir, "inventory_snapshot.csv")
+                            po_local = os.path.join(inbound_dir, "po_activity.csv")
+                            with open(inv_local, "wb") as f:
+                                f.write(inv_bytes)
+
+                            run_pipeline = True
+                            po_file = _sftp_newest_csv_name(sftp, inbound, po_pat)
+                            if po_file:
+                                po_remote = f"{inbound.rstrip('/')}/{po_file}"
+                                with sftp.file(po_remote, "rb") as rf:
+                                    po_bytes = rf.read()
+                                if len(po_bytes) > max_bytes:
+                                    st.error(f"PO file exceeds max size ({max_file_size_mb} MB).")
+                                    run_pipeline = False
+                                else:
+                                    with open(po_local, "wb") as f:
+                                        f.write(po_bytes)
+                            else:
+                                if os.path.exists(po_local):
+                                    os.remove(po_local)
+
+                            if run_pipeline:
+                                from main import run_daily_governor
+
+                                report_buffer = io.StringIO()
+                                with redirect_stdout(report_buffer):
+                                    run_daily_governor(
+                                        client_uuid=client_uuid,
+                                        proxy_cash=float(proxy_cash),
+                                        proxy_ap=float(proxy_ap),
+                                    )
+                                out = report_buffer.getvalue()
+                                st.subheader("Govnr pipeline output")
+                                st.code(out or "(no stdout captured)", language="text")
+                                _log_ingestion_run_row(
+                                    client_uuid,
+                                    inv_file,
+                                    inv_hash,
+                                    "dry_run",
+                                    None,
+                                )
+                                st.success("Dry run completed. Remote SFTP files were not modified.")
+            except Exception as e:
+                err = str(e)
+                st.error(f"Dry run failed: {err}")
+                try:
+                    _log_ingestion_run_row(client_uuid, "dry_run_error", hashlib.sha256(err.encode()).hexdigest()[:64], "failed", err)
+                except Exception:
+                    pass
+            finally:
+                if sftp:
+                    sftp.close()
+                if transport:
+                    transport.close()
 
     st.markdown("---")
     st.subheader("Recent Ingestion Runs")
