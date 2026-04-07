@@ -31,12 +31,14 @@ def login_page():
     
     with tab1:
         st.subheader("Client Login")
-        email = st.text_input("Work Email")
-        password = st.text_input("Password", type="password")
-        
-        if st.button("Access Dashboard"):
+        # Unique keys: both tabs run every script execution; keys prevent widget identity collisions.
+        email = st.text_input("Work Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+
+        if st.button("Access Dashboard", key="btn_login"):
             if email and password:
-                success, result = auth.login_client(email, password)
+                with st.spinner("Signing in…"):
+                    success, result = auth.login_client(email, password)
                 if success:
                     st.session_state["authenticated"] = True
                     st.session_state["client_uuid"] = str(result["client_uuid"])
@@ -49,16 +51,17 @@ def login_page():
                     st.error(result)
             else:
                 st.warning("Please enter both email and password.")
-                
+
     with tab2:
         st.subheader("Onboarding Registration")
-        reg_company = st.text_input("Company Name")
-        reg_email = st.text_input("CFO / Admin Email")
-        reg_password = st.text_input("Create Password", type="password")
-        
-        if st.button("Register & Generate Secure ID"):
+        reg_company = st.text_input("Company Name", key="reg_company")
+        reg_email = st.text_input("CFO / Admin Email", key="reg_email")
+        reg_password = st.text_input("Create Password", type="password", key="reg_password")
+
+        if st.button("Register & Generate Secure ID", key="btn_register"):
             if reg_company and reg_email and reg_password:
-                success, result = auth.register_new_client(reg_company, reg_email, reg_password)
+                with st.spinner("Creating your account…"):
+                    success, result = auth.register_new_client(reg_company, reg_email, reg_password)
                 if success:
                     st.success("Account created successfully! Please switch to the Log In tab to access your dashboard.")
                 else:

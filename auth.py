@@ -16,9 +16,11 @@ def _database_url() -> str:
 
 
 def get_db_connection():
+    # connect_timeout avoids an indefinite hang (grey Streamlit overlay) when the DB is unreachable.
     return psycopg2.connect(
         _database_url(),
-        cursor_factory=RealDictCursor
+        connect_timeout=15,
+        cursor_factory=RealDictCursor,
     )
 
 def hash_password(password: str) -> str:
@@ -30,45 +32,55 @@ def verify_password(password: str, hashed: str) -> bool:
 def register_new_client(company_name: str, email: str, password: str):
     prefix = "".join(e for e in company_name if e.isalnum()).lower()
     hashed_pw = hash_password(password)
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
+
+    conn = None
+    cursor = None
     try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO clients (company_name, contact_email, password_hash, inbound_email_prefix)
             VALUES (%s, %s, %s, %s)
             RETURNING client_uuid, inbound_email_prefix;
         """, (company_name, email, hashed_pw, prefix))
-        
+
         new_client = cursor.fetchone()
         conn.commit()
         return True, new_client
     except psycopg2.IntegrityError:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         return False, "Error: Email or Company name already exists in our system."
     except Exception as e:
-        conn.rollback()
+        if conn:
+            conn.rollback()
         return False, f"Database error: {str(e)}"
     finally:
-        cursor.close()
-        conn.close()
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            conn.close()
 
 def login_client(email: str, password: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT client_uuid, company_name, password_hash, account_tier, inventory_column_mapping, inbound_email_prefix 
-        FROM clients WHERE contact_email = %s
-    """, (email,))
-    user = cursor.fetchone()
-    
-    cursor.close()
-    conn.close()
+    try:
+        conn = get_db_connection()
+    except Exception as e:
+        return False, f"Database connection failed: {e}"
 
-    if user and verify_password(password, user['password_hash']):
-        return True, user
-    return False, "Invalid email or password."
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT client_uuid, company_name, password_hash, account_tier, inventory_column_mapping, inbound_email_prefix
+            FROM clients WHERE contact_email = %s
+        """, (email,))
+        user = cursor.fetchone()
+        cursor.close()
+
+        if user and verify_password(password, user["password_hash"]):
+            return True, user
+        return False, "Invalid email or password."
+    finally:
+        conn.close()
 
 def save_column_mapping(client_uuid: str, mapping_dict: dict):
     conn = get_db_connection()
