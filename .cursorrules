@@ -1,0 +1,16 @@
+# GOVNR SYSTEMS - POLARS & ARCHITECTURE MANDATES
+
+## 1. Defensive Polars Casting
+- Polars is strictly typed. NEVER rely on CSV schema inference for strings or IDs.
+- When reading CSVs, normalize ID and text columns through `engine.polars_list_compat.coerce_scalar_string_columns` (or equivalent) before applying `.str.*`. On Polars 1.x, duplicate headers or concat can yield `list[str]` cells; `.str.strip_chars()` on those dtypes crashes (internal `lst.join` / wrong kernel). NEVER apply `.str` to list-typed columns.
+- After `group_by` / `implode`, list columns are `List` dtypes. To flatten for CSV or scalar logic: use `flatten_list_columns_to_utf8_for_csv`, or `map_elements` to join strings, or take a single value with `list.get(0)` only when the dtype is provably `List`. Do not use `.list.join` on `list[str]` in Polars 1.x where the engine rejects it; prefer `map_elements` for portable joins.
+- All Quantity and Financial columns must be explicitly cast to `pl.Float64` using `.fill_null(0.0)`.
+
+## 2. Null Handling & Idempotency
+- Never assume a column exists or is fully populated. Use 'Deterministic Degradation'.
+- If a math variable is missing or null, use `.fill_null(0)` for numbers or `.fill_null("Unknown")` for strings.
+- Do not write temporary physical files to the disk (e.g., PDFs or intermediate CSVs) unless explicitly told. Use `io.BytesIO()` for in-memory buffers.
+
+## 3. Nomenclature & Typography
+- Adhere strictly to the Govnr Data Dictionary (e.g., `Item_Identifier`, `Unit_Average_Cost`, `Quantity_On_Hand`). Do NOT revert to generic terms like `SKU` or `Qty`.
+- NEVER use smart quotes, non-breaking spaces, or emojis in Python code or UI strings. Use strict UTF-8 / ASCII.
