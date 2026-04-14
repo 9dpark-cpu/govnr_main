@@ -40,8 +40,7 @@ class ClientConfig:
     inventory_filename_pattern: str
     po_filename_pattern: str
     delete_remote_after_success: bool
-    proxy_cash: float
-    proxy_ap: float
+    weekly_otb_limit: float
     max_file_size_mb: int
 
 
@@ -74,8 +73,7 @@ def fetch_enabled_configs():
                 cfg.inventory_filename_pattern,
                 cfg.po_filename_pattern,
                 cfg.delete_remote_after_success,
-                cfg.proxy_cash,
-                cfg.proxy_ap,
+                cfg.weekly_otb_limit,
                 cfg.max_file_size_mb
             FROM client_ingestion_config cfg
             JOIN clients c ON c.client_uuid = cfg.client_uuid
@@ -98,8 +96,7 @@ def fetch_enabled_configs():
                     inventory_filename_pattern=row.get("inventory_filename_pattern") or "inventory_snapshot",
                     po_filename_pattern=row.get("po_filename_pattern") or "po_activity",
                     delete_remote_after_success=bool(row.get("delete_remote_after_success")),
-                    proxy_cash=float(row.get("proxy_cash") or 35000.0),
-                    proxy_ap=float(row.get("proxy_ap") or 28000.0),
+                    weekly_otb_limit=float(row.get("weekly_otb_limit") or 100000.0),
                     max_file_size_mb=int(row.get("max_file_size_mb") or DEFAULT_MAX_FILE_MB),
                 )
             )
@@ -288,8 +285,7 @@ def process_client_config(cfg: ClientConfig):
 
         run_daily_governor(
             client_uuid=cfg.client_uuid,
-            proxy_cash=cfg.proxy_cash,
-            proxy_ap=cfg.proxy_ap,
+            weekly_otb_limit=cfg.weekly_otb_limit,
         )
 
         # Mark success using inventory hash as the primary idempotency signal.

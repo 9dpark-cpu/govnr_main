@@ -1,116 +1,196 @@
 import io
-import os
 from datetime import datetime
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
 
-def generate_cfo_pdf(grade: str, total_inventory_value: float, turnover_ratio: float, 
-                     dead_val: float, integrity_qty: int, integrity_skus: int, 
-                     disparity_sku_count: int, neg_skus: int) -> io.BytesIO:
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+
+def generate_cfo_pdf(
+    grade: str,
+    total_capital_deployed: float,
+    estimated_turnover_ratio: float,
+    dead_val: float,
+    integrity_qty: int,
+    integrity_item_count: int,
+    transfer_item_count: int,
+    neg_item_count: int,
+    weekly_otb_limit: float,
+    total_draft_po_amount: float,
+    cash_collision: bool,
+    loss_item_count: int,
+    cost_variance_item_count: int,
+) -> io.BytesIO:
     """
-    Generates a highly professional, 1-page PDF Data Health Scan.
-    Operates entirely in memory via io.BytesIO to satisfy ephemeral cloud constraints.
+    One-page in-memory CFO strategic brief (Data Health Scan executive summary).
     """
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
-    elements =[]
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40,
+    )
+    elements = []
 
     styles = getSampleStyleSheet()
-    
-    # Custom Enterprise Styles
+
     title_style = ParagraphStyle(
-        "TitleStyle", parent=styles["Heading1"], fontSize=18, spaceAfter=6, 
-        textColor=colors.HexColor("#1A1A1A"), fontName="Helvetica-Bold"
+        "TitleStyle",
+        parent=styles["Heading1"],
+        fontSize=16,
+        spaceAfter=6,
+        textColor=colors.HexColor("#1A1A1A"),
+        fontName="Helvetica-Bold",
     )
     subtitle_style = ParagraphStyle(
-        "SubtitleStyle", parent=styles["Normal"], fontSize=10, spaceAfter=20, 
-        textColor=colors.HexColor("#555555"), fontName="Helvetica"
+        "SubtitleStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        spaceAfter=16,
+        textColor=colors.HexColor("#555555"),
+        fontName="Helvetica",
     )
     header_style = ParagraphStyle(
-        "HeaderStyle", parent=styles["Heading2"], fontSize=12, spaceAfter=8, 
-        textColor=colors.HexColor("#2A2A2A"), fontName="Helvetica-Bold",
-        borderPadding=(0, 0, 4, 0)
+        "HeaderStyle",
+        parent=styles["Heading2"],
+        fontSize=11,
+        spaceAfter=6,
+        textColor=colors.HexColor("#2A2A2A"),
+        fontName="Helvetica-Bold",
     )
     body_style = ParagraphStyle(
-        "BodyStyle", parent=styles["Normal"], fontSize=10, spaceAfter=12, 
-        leading=14, textColor=colors.HexColor("#1A1A1A"), fontName="Helvetica"
+        "BodyStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        spaceAfter=8,
+        leading=12,
+        textColor=colors.HexColor("#1A1A1A"),
+        fontName="Helvetica",
     )
     alert_style = ParagraphStyle(
-        "AlertStyle", parent=styles["Normal"], fontSize=10, spaceAfter=12, 
-        leading=14, textColor=colors.HexColor("#8B0000"), fontName="Helvetica-Bold"
+        "AlertStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        spaceAfter=8,
+        leading=12,
+        textColor=colors.HexColor("#8B0000"),
+        fontName="Helvetica-Bold",
     )
 
-    # 1. Header Section
     elements.append(Paragraph("GOVNR SYSTEMS INC.", title_style))
-    elements.append(Paragraph("DATA HEALTH SCAN: EXECUTIVE BRIEF", title_style))
+    elements.append(Paragraph("CFO STRATEGIC BRIEF — DATA HEALTH SCAN", title_style))
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    elements.append(Paragraph(f"Generated: {timestamp_str} | Target: Chief Financial Officer", subtitle_style))
-    
-    # 2. Executive Summary Table
-    elements.append(Paragraph("I. FINANCIAL PERFORMANCE RATING", header_style))
-    
+    elements.append(
+        Paragraph(f"Generated: {timestamp_str} | Audience: Chief Financial Officer", subtitle_style)
+    )
+
+    elements.append(Paragraph("I. FINANCIAL PERFORMANCE", header_style))
     summary_data = [
-        ["System Grade:", grade],["Total Tracked Capital:", f"${total_inventory_value:,.2f}"],["Est. Inventory Turnover:", f"{turnover_ratio:.2f}x (Benchmark: 4.0x - 6.0x)"]
+        ["System grade:", grade],
+        ["Total Capital Deployed:", f"${total_capital_deployed:,.2f}"],
+        ["Inventory Velocity (Turnover):", f"{estimated_turnover_ratio:.2f}x"],
     ]
-    
-    t_summary = Table(summary_data, colWidths=[150, 350])
-    t_summary.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1A1A1A")),
-    ]))
+    t_summary = Table(summary_data, colWidths=[160, 340])
+    t_summary.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#1A1A1A")),
+            ]
+        )
+    )
     elements.append(t_summary)
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 10))
 
-    # 3. Capital Leakage (Dead Stock)
-    elements.append(Paragraph("II. NON-PERFORMING CAPITAL SUMMARY", header_style))
-    elements.append(Paragraph(
-        f"<b>Dead Stock Value:</b> ${dead_val:,.2f}<br/>"
-        "<i>Definition: Physical inventory with a quantity greater than zero, possessing zero recorded sales velocity over the trailing 365-day period, and lacking any active supersession/replacement sales velocity.</i>",
-        body_style
-    ))
-    elements.append(Spacer(1, 5))
-
-    # 4. Data Integrity (Margin Blindness)
-    elements.append(Paragraph("III. COST ATTRIBUTION INTEGRITY (MARGIN BLINDNESS)", header_style))
-    elements.append(Paragraph(
-        f"<b>Identified Risk:</b> {integrity_qty:,} physical units across {integrity_skus} SKUs currently lack deterministic cost guardrails (Unit Cost is recorded as $0.00, or Unit Cost exceeds Retail Price).", 
-        body_style
-    ))
-    elements.append(Paragraph(
-        "<b>Financial Impact:</b> Downstream gross margin reports generated by the ERP for these specific identifiers are mathematically invalid.", 
-        alert_style
-    ))
-    elements.append(Spacer(1, 5))
-
-    # 5. Regional Disparity
-    elements.append(Paragraph("IV. REGIONAL STOCK-TO-SALES DISPARITY", header_style))
-    if disparity_sku_count > 0:
-        elements.append(Paragraph(
-            f"<b>Identified Risk:</b> {disparity_sku_count} SKUs exhibit a >1.0x turnover variance across multiple warehouse locations.", 
-            body_style
-        ))
-        elements.append(Paragraph(
-            "<b>Financial Impact:</b> Capital is currently stranded in low-velocity locations while high-velocity locations risk stock-outs and lost revenue.", 
-            alert_style
-        ))
+    elements.append(Paragraph("II. SAFE SPENDING LIMIT & CASH COLLISION", header_style))
+    elements.append(
+        Paragraph(
+            f"<b>Weekly OTB limit:</b> ${weekly_otb_limit:,.2f}<br/>"
+            f"<b>Draft PO total (rolling 7 days):</b> ${total_draft_po_amount:,.2f}<br/>"
+            "<i>Compared to your CFO-approved weekly ceiling using location-first capital math.</i>",
+            body_style,
+        )
+    )
+    if cash_collision:
+        elements.append(
+            Paragraph(
+                "<b>Cash Collision Warning:</b> Pending purchase orders in the rolling window exceed your safe spending limit.",
+                alert_style,
+            )
+        )
     else:
-        elements.append(Paragraph("<b>Status:</b> Zero SKUs currently exhibit dangerous regional variance. Inter-branch inventory balancing is healthy.", body_style))
-    
-    elements.append(Spacer(1, 5))
+        elements.append(Paragraph("<b>Status:</b> Draft PO exposure is within the weekly OTB limit.", body_style))
+    elements.append(Spacer(1, 6))
 
-    # 6. Strategic Gap Analysis (The Sales Close)
-    elements.append(Paragraph("V. GOVNR STRATEGIC GAP ANALYSIS", header_style))
-    elements.append(Paragraph(
-        "The preceding diagnostic scan reflects static, downstream ERP exposure. To calculate your True Landed Cost, Open-to-Buy (OTB) Budget, and algorithmically prevent upcoming Cash Collisions at the point of procurement, Govnr requires deployment of the Full Audit Ledger.",
-        body_style
-    ))
-    
-    # Build PDF
+    elements.append(Paragraph("III. DEAD STOCK", header_style))
+    elements.append(
+        Paragraph(
+            f"<b>Dead stock (non-performing capital):</b> ${dead_val:,.2f}<br/>"
+            "<i>Zero trailing annual sold, no replacement demand, extended dormancy, with physical on-hand.</i>",
+            body_style,
+        )
+    )
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("IV. WAREHOUSE TRANSFER ALERTS", header_style))
+    if transfer_item_count > 0:
+        elements.append(
+            Paragraph(
+                f"<b>Flagged items:</b> {transfer_item_count} — one location under ~15 days supply while another exceeds ~180 days.",
+                alert_style,
+            )
+        )
+    else:
+        elements.append(Paragraph("<b>Status:</b> No transfer pattern detected on current thresholds.", body_style))
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("V. SELLING AT A LOSS", header_style))
+    elements.append(
+        Paragraph(
+            f"<b>Distinct items at or below average cost vs base price (with on-hand):</b> {loss_item_count}.<br/>"
+            "<i>Requires audit for intentional loss-leaders vs data errors.</i>",
+            body_style,
+        )
+    )
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("VI. MISSING / $0 COST ALERT", header_style))
+    elements.append(
+        Paragraph(
+            f"<b>Units on-hand with non-positive average cost:</b> {integrity_qty:,} across {integrity_item_count} items.<br/>"
+            "<i>Margin reporting for these identifiers is not reliable until ERP cost is corrected.</i>",
+            body_style,
+        )
+    )
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("VII. INTERBRANCH COST DIFFERENCE", header_style))
+    if cost_variance_item_count > 0:
+        elements.append(
+            Paragraph(
+                f"<b>Flagged items:</b> {cost_variance_item_count} with &gt;25% spread between min and max location average cost.",
+                alert_style,
+            )
+        )
+    else:
+        elements.append(Paragraph("<b>Status:</b> No material inter-location average cost spread detected.", body_style))
+    elements.append(Spacer(1, 6))
+
+    elements.append(Paragraph("VIII. NEGATIVE INVENTORY", header_style))
+    elements.append(
+        Paragraph(
+            f"<b>Distinct items with negative computed on-hand (pre-policy):</b> {neg_item_count}.",
+            body_style,
+        )
+    )
+
     doc.build(elements)
     buffer.seek(0)
     return buffer

@@ -19,8 +19,7 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
             inventory_filename_pattern VARCHAR(255) DEFAULT 'inventory_snapshot',
             po_filename_pattern VARCHAR(255) DEFAULT 'po_activity',
             delete_remote_after_success BOOLEAN DEFAULT FALSE,
-            proxy_cash NUMERIC(15, 2) DEFAULT 35000.00,
-            proxy_ap NUMERIC(15, 2) DEFAULT 28000.00,
+            weekly_otb_limit NUMERIC(15, 2) DEFAULT 100000.00,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
@@ -34,6 +33,11 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
     cursor.execute(
         "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS max_file_size_mb INTEGER DEFAULT 150;"
     )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS weekly_otb_limit NUMERIC(15, 2) DEFAULT 100000.00;"
+    )
+    cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_cash;")
+    cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_ap;")
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS ingestion_runs (

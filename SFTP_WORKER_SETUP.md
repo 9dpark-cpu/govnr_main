@@ -51,8 +51,7 @@ INSERT INTO client_ingestion_config (
   inventory_filename_pattern,
   po_filename_pattern,
   delete_remote_after_success,
-  proxy_cash,
-  proxy_ap,
+  weekly_otb_limit,
   max_file_size_mb
 )
 VALUES (
@@ -68,8 +67,7 @@ VALUES (
   'inventory_snapshot',
   'po_activity',
   FALSE,
-  35000,
-  28000,
+  100000,
   150
 )
 ON CONFLICT (client_uuid) DO UPDATE SET
@@ -84,8 +82,7 @@ ON CONFLICT (client_uuid) DO UPDATE SET
   inventory_filename_pattern = EXCLUDED.inventory_filename_pattern,
   po_filename_pattern = EXCLUDED.po_filename_pattern,
   delete_remote_after_success = EXCLUDED.delete_remote_after_success,
-  proxy_cash = EXCLUDED.proxy_cash,
-  proxy_ap = EXCLUDED.proxy_ap,
+  weekly_otb_limit = EXCLUDED.weekly_otb_limit,
   max_file_size_mb = EXCLUDED.max_file_size_mb,
   updated_at = CURRENT_TIMESTAMP;
 ```

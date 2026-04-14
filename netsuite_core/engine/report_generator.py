@@ -8,97 +8,171 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-def generate_audit_csv_buffers(df_dead: pl.DataFrame, df_integrity: pl.DataFrame, df_neg: pl.DataFrame, df_disparity_export: pl.DataFrame) -> dict:
+
+def generate_audit_csv_buffers(
+    df_dead: pl.DataFrame,
+    df_integrity: pl.DataFrame,
+    df_neg: pl.DataFrame,
+    df_transfer: pl.DataFrame,
+    df_loss: pl.DataFrame,
+    df_cost_variance: pl.DataFrame,
+) -> dict:
     """
     Generates in-memory CSV buffers instead of writing to ephemeral cloud disks.
     Returns a dictionary of filenames mapped to their encoded byte strings.
     """
     buffers = {}
-    
-    datasets =[
+
+    if not df_integrity.is_empty() or not df_loss.is_empty():
+        parts = []
+        if not df_integrity.is_empty():
+            parts.append(df_integrity.with_columns(pl.lit("Missing / $0 Cost").alias("Alert_Type")))
+        if not df_loss.is_empty():
+            parts.append(df_loss.with_columns(pl.lit("Selling at a Loss").alias("Alert_Type")))
+        df_combined_integrity = pl.concat(parts, how="diagonal")
+        buffers["Report_2_cost_integrity.csv"] = df_combined_integrity.write_csv().encode("utf-8")
+
+    datasets = [
         ("Report_1_Dead_stock.csv", df_dead),
-        ("Report_2_cost_integrity.csv", df_integrity),
         ("Report_3_negative_inventory.csv", df_neg),
-        ("Report_4_regional_disparity.csv", df_disparity_export)
     ]
-    
+
     for filename, df in datasets:
         if not df.is_empty():
-            # In Polars, write_csv() without a file argument returns a string. 
-            # We encode to utf-8 bytes for secure frontend downloading/emailing.
             buffers[filename] = df.write_csv().encode("utf-8")
-            
+
+    if not df_transfer.is_empty() or not df_cost_variance.is_empty():
+        parts_r4 = []
+        if not df_transfer.is_empty():
+            parts_r4.append(
+                df_transfer.with_columns(pl.lit("Warehouse Transfer Alert").alias("Alert_Type"))
+            )
+        if not df_cost_variance.is_empty():
+            parts_r4.append(
+                df_cost_variance.with_columns(pl.lit("Interbranch Cost Difference").alias("Alert_Type"))
+            )
+        df_r4 = pl.concat(parts_r4, how="diagonal")
+        buffers["Report_4_regional_disparity.csv"] = df_r4.write_csv().encode("utf-8")
+
     return buffers
-    
-def print_cfo_report(grade, total_inventory_value, turnover_ratio, dead_val, df_dead, 
-                     integrity_qty, integrity_skus, df_integrity, 
-                     disparity_sku_count, df_disparity_export, 
-                     neg_skus, df_neg):
-                     
-    print("\n" + "="*75)
+
+
+def print_cfo_report(
+    grade,
+    total_inventory_value,
+    turnover_ratio,
+    dead_val,
+    df_dead,
+    integrity_qty,
+    integrity_item_count,
+    df_integrity,
+    transfer_item_count,
+    df_transfer_export,
+    neg_item_count,
+    df_neg,
+    df_loss,
+    cost_variance_item_count,
+    weekly_otb_limit,
+    total_draft_po_amount,
+    cash_collision,
+):
+    print("\n" + "=" * 75)
     print("GOVNR DATA HEALTH SCAN RESULTS")
     print(f"   Target: Chief Financial Officer / Operations Director")
     print(f"   Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*75)
-    
+    print("=" * 75)
+
     print(f"\n FINANCIAL PERFORMANCE RATING: {grade}")
-    print(f"   -> Total Tracked Capital Deployed: ${total_inventory_value:,.2f}")
-    print(f"   -> Estimated Inventory Turnover Ratio: {turnover_ratio:.2f}x (Industry Benchmark: 4.0x - 6.0x)")
-    
-    print("\n NON-PERFORMING CAPITAL SUMMARY")
-    print(f"   -> Dead Stock Value (Qty > 0, 365d Sales = 0): ${dead_val:,.2f}")
+    print(f"   -> Total Capital Deployed: ${total_inventory_value:,.2f}")
+    print(f"   -> Estimated Inventory Turnover (Velocity): {turnover_ratio:.2f}x (Industry Benchmark: 4.0x - 6.0x)")
 
-    print("\n COST ATTRIBUTION INTEGRITY (Margin Blindness)")
-    print(f"   -> {integrity_qty:,} physical units currently lack cost guardrails (Cost $0.00 or Cost > Retail Price).")
-    print(f"   -> Impact: Your downstream profit reports for {integrity_skus} SKUs are mathematically invalid.")
+    print("\n NON-PERFORMING CAPITAL (DEAD STOCK)")
+    print(f"   -> Dead Stock Value: ${dead_val:,.2f}")
 
-    print("\n REGIONAL STOCK-TO-SALES DISPARITY")
-    if disparity_sku_count > 0:
-        print(f"   -> {disparity_sku_count} SKUs exhibit >1.0x turnover variance across multiple warehouses.")
-        print(f"   -> Impact: Capital is stranded in low-velocity locations while high-velocity locations risk stock-outs.")
+    print("\n COST ATTRIBUTION & MARGIN INTEGRITY")
+    loss_row_count = 0 if df_loss.is_empty() else df_loss.height
+    print(
+        f"   -> {integrity_qty:,} physical units across {integrity_item_count} items lack deterministic cost guardrails ($0 or negative cost), "
+        f"or selling-at-a-loss exposure on {loss_row_count} location rows."
+    )
+
+    print("\n WAREHOUSE TRANSFER & INTERBRANCH COST SIGNALS")
+    if transfer_item_count > 0:
+        print(
+            f"   -> {transfer_item_count} items exhibit low days-supply in one location and excess (>180d) in another."
+        )
     else:
-        print(f"   -> 0 SKUs currently exhibit dangerous regional variance. Inventory balancing is healthy.")
+        print("   -> No warehouse transfer misallocation pattern detected on current thresholds.")
+
+    if cost_variance_item_count > 0:
+        print(f"   -> {cost_variance_item_count} items show >25% average-cost spread across locations.")
+
+    print("\n ROLLING OPEN-TO-BUY (7-DAY DRAFT PO EXPOSURE)")
+    print(f"   -> Safe Spending Limit (Weekly OTB): ${weekly_otb_limit:,.2f}")
+    print(f"   -> Draft PO Amount (rolling 7 days): ${total_draft_po_amount:,.2f}")
+    if cash_collision:
+        print("   -> CASH COLLISION WARNING: Draft POs exceed the Weekly OTB limit.")
+    else:
+        print("   -> Draft PO exposure is within the Weekly OTB limit.")
+
+    print("\n NEGATIVE INVENTORY")
+    if neg_item_count > 0:
+        print(f"   -> {neg_item_count} distinct items show negative computed on-hand (data integrity).")
+    else:
+        print("   -> No negative on-hand rows after clamping.")
 
     print("\n  SAMPLE AUDIT: MULTI-POINT CAPITAL VERIFICATION")
-    print("[High Exposure SKUs identified across your Logic Rail]\n")
+    print("[High-exposure items identified across your logic rail]\n")
 
     if not df_dead.is_empty():
-        row = df_dead.sort("Total_Capital_Deployed", descending=True).row(0, named=True)
-        print("   1. [DEAD CAPITAL]")
-        print(f"      - {row['SKU']} | {row['Title'][:25]} | ${row['Total_Capital_Deployed']:,.2f} Trapped")
-        print("        (Reason: 0 Sales in 365 days; High procurement volume)\n")
+        row = df_dead.sort("Location_Capital_Deployed", descending=True).row(0, named=True)
+        print("   1. [DEAD STOCK]")
+        print(
+            f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | ${row['Location_Capital_Deployed']:,.2f} Trapped"
+        )
+        print("        (Reason: zero trailing velocity with no active replacement demand)\n")
 
     if not df_integrity.is_empty():
-        df_int_exp = df_integrity.with_columns((pl.col("Price") * pl.col("Qty_On_Hand")).alias("Retail_Exposure"))
+        df_int_exp = df_integrity.with_columns(
+            (pl.col("Unit_Base_Price") * pl.col("Quantity_On_Hand")).alias("Retail_Exposure")
+        )
         row = df_int_exp.sort("Retail_Exposure", descending=True).row(0, named=True)
-        print("   2.[MARGIN BLINDNESS]")
-        print(f"      - {row['SKU']} | {row['Title'][:25]} | ${row['Retail_Exposure']:,.2f} Exposure")
-        print(f"        (Reason: Unit Cost is ${row['Unit_Cost']:,.2f} in ERP; Profitability unverified)\n")
+        print("   2. [MISSING / $0 COST]")
+        print(
+            f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | ${row['Retail_Exposure']:,.2f} Exposure"
+        )
+        print(f"        (Reason: unit average cost is ${row['Unit_Average_Cost']:,.2f})\n")
 
-    if not df_disparity_export.is_empty():
-        top_sku = df_disparity_export.group_by("SKU").agg(pl.col("Total_Capital_Deployed").sum()).sort("Total_Capital_Deployed", descending=True).row(0)[0]
-        sku_rows = df_disparity_export.filter(pl.col("SKU") == top_sku)
-        title = sku_rows[0, "Title"]
-        total_cap = sku_rows["Total_Capital_Deployed"].sum()
-        loc_0 = sku_rows[0, "Location"]
-        qty_0 = sku_rows[0, "Qty_On_Hand"]
-        loc_1 = sku_rows[1, "Location"] if sku_rows.height > 1 else "Other Warehouse"
-        qty_1 = sku_rows[1, "Qty_On_Hand"] if sku_rows.height > 1 else 0
-        
-        print("   3. [REGIONAL DISPARITY]")
-        print(f"      - {top_sku} | {title[:25]} | ${total_cap:,.2f} Stranded")
-        print(f"        (Reason: {qty_0} Units in {loc_0[:15]}; {qty_1} Units in {loc_1[:15]}; Capital inefficiently allocated)\n")
+    if not df_transfer_export.is_empty():
+        top_item = (
+            df_transfer_export.group_by("Item_Identifier")
+            .agg(pl.col("Location_Capital_Deployed").sum())
+            .sort("Location_Capital_Deployed", descending=True)
+            .row(0)[0]
+        )
+        item_rows = df_transfer_export.filter(pl.col("Item_Identifier") == top_item)
+        title = item_rows[0, "Item_Description"]
+        total_cap = item_rows["Location_Capital_Deployed"].sum()
+        loc_0 = item_rows[0, "Item_Location"]
+        qty_0 = item_rows[0, "Quantity_On_Hand"]
+        loc_1 = item_rows[1, "Item_Location"] if item_rows.height > 1 else "Other Warehouse"
+        qty_1 = item_rows[1, "Quantity_On_Hand"] if item_rows.height > 1 else 0
+
+        print("   3. [WAREHOUSE TRANSFER ALERT]")
+        print(f"      - {top_item} | {str(title)[:25]} | ${total_cap:,.2f} Stranded")
+        print(
+            f"        (Reason: {qty_0} units in {str(loc_0)[:15]}; {qty_1} units in {str(loc_1)[:15]}; days-supply imbalance)\n"
+        )
 
     if not df_neg.is_empty():
-        row = df_neg.sort("Qty_On_Hand", descending=False).row(0, named=True)
+        row = df_neg.sort("Quantity_On_Hand", descending=False).row(0, named=True)
         print("   4. [DATA INTEGRITY]")
-        print(f"      - {row['SKU']} | {row['Title'][:25]} | SYSTEM DRIFT")
-        print(f"        (Reason: Negative Inventory ({row['Qty_On_Hand']} Units) detected; Likely Sync failure)\n")
+        print(f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | SYSTEM DRIFT")
+        print(f"        (Reason: negative on-hand ({row['Quantity_On_Hand']} units) before clamp policy)\n")
 
-    print("="*75)
+    print("=" * 75)
     print(" GOVNR STRATEGIC GAP ANALYSIS")
     print("   The above data reflects your downstream ERP exposure.")
-    print("   To calculate your True Landed Cost, Open-to-Buy (OTB) Budget, and ")
-    print("   prevent upcoming Cash Collisions, Govnr requires your Full Audit Ledger.")
-    print("="*75 + "\n")
-    print("[Govnr Internal] Diagnostic Scan Complete. In-memory data buffers generated.")
+    print("   Rolling OTB compares trailing 7-day draft PO totals to your CFO-approved weekly ceiling.")
+    print("=" * 75 + "\n")
+    print("[Govnr Internal] Diagnostic scan complete. In-memory data buffers generated.")

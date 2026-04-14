@@ -1,5 +1,7 @@
 import os
 import sys
+from datetime import date, timedelta
+
 import polars as pl
 
 # --- DEFENSIVE PATHING ---
@@ -7,101 +9,70 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# In the future, this imports from config.py
-# from config import QBO_CLIENT_ID, etc.
 
 def calculate_working_capital(
-    df_pending_pos: pl.DataFrame, 
-    proxy_cash_balance: float = 35000.00, 
-    proxy_upcoming_ap: float = 28000.00,
-    reserve_percentage: float = 0.10
+    df_pending_pos: pl.DataFrame,
+    weekly_otb_limit: float = 100_000.00,
 ) -> dict:
     """
-    Calculates the Daily Working Capital Budget (OTB) and checks for Cash Collisions.
-    
-    :param proxy_cash_balance: The simulated bank balance (Later: QBO API)
-    :param proxy_upcoming_ap: Bills due in the next 1-15 days (Later: NetSuite AP Aging)
-    :param reserve_percentage: Minimum cash buffer to hold (10% default)
+    Rolling 7-day draft PO exposure vs CFO-approved weekly OTB ceiling.
+    All rows in the PO export are summed (client saved search is authoritative).
     """
-    
-    # 1. Base Financials
-    operating_reserve = proxy_cash_balance * reserve_percentage
-    # OTB = Cash - Bills - Safety Net
-    safe_spending_limit = proxy_cash_balance - proxy_upcoming_ap - operating_reserve
-    
-    # Floor the OTB at $0 (Can't have a negative budget)
-    safe_spending_limit = max(0.0, safe_spending_limit)
-
-    # 2. Calculate Intended Spend (Pending POs)
-    if not df_pending_pos.is_empty():
-        total_po_exposure = df_pending_pos["Total_Amount"].sum()
+    if df_pending_pos.is_empty():
+        total_draft_po_amount = 0.0
     else:
-        total_po_exposure = 0.0
+        cutoff = date.today() - timedelta(days=7)
+        df_eff = df_pending_pos.with_columns(
+            pl.col("Date_Created").fill_null(pl.lit(date.today())).alias("_eff_date")
+        )
+        total_draft_po_amount = float(
+            df_eff.filter(pl.col("_eff_date") >= pl.lit(cutoff))["Order_Total_Amount"].sum()
+        )
 
-    # 3. Cash-Collision Logic Engine
-    liquidity_status = "Healthy"
+    liquidity_status = " BUDGET COMPLIANT"
     action_brief = ""
 
-    if proxy_upcoming_ap > proxy_cash_balance:
-        liquidity_status = " SEVERE LIQUIDITY CONSTRAINT"
-        action_brief = f"Your upcoming payables (${proxy_upcoming_ap:,.2f}) exceed your cash position (${proxy_cash_balance:,.2f}). FREEZE ALL NON-ESSENTIAL PROCUREMENT."
-    
-    elif total_po_exposure > safe_spending_limit:
+    if total_draft_po_amount > float(weekly_otb_limit):
         liquidity_status = " CASH COLLISION WARNING"
-        shortfall = total_po_exposure - safe_spending_limit
-        action_brief = f"Draft POs total ${total_po_exposure:,.2f}, but your Safe Spending Limit is only ${safe_spending_limit:,.2f}. Please cut ${shortfall:,.2f} from pending POs to protect payroll."
-    
+        shortfall = total_draft_po_amount - float(weekly_otb_limit)
+        action_brief = (
+            f"Draft PO lines over the last 7 days total ${total_draft_po_amount:,.2f}, "
+            f"exceeding your Weekly OTB limit of ${weekly_otb_limit:,.2f}. "
+            f"Reduce pending exposure by approximately ${shortfall:,.2f} to restore compliance."
+        )
     else:
-        liquidity_status = " BUDGET COMPLIANT"
-        action_brief = f"Pending POs (${total_po_exposure:,.2f}) are within your Safe Spending Limit (${safe_spending_limit:,.2f}). Proceed with procurement."
+        action_brief = (
+            f"Rolling 7-day draft PO total (${total_draft_po_amount:,.2f}) is within the "
+            f"Weekly OTB limit (${weekly_otb_limit:,.2f})."
+        )
 
-    # Return the CFO Report Dictionary
     return {
-        "Cash_Position": proxy_cash_balance,
-        "Upcoming_AP": proxy_upcoming_ap,
-        "Operating_Reserve": operating_reserve,
-        "Safe_Spending_Limit_OTB": safe_spending_limit,
-        "Total_PO_Exposure": total_po_exposure,
+        "Weekly_OTB_Limit": float(weekly_otb_limit),
+        "Total_Draft_PO_Amount": total_draft_po_amount,
+        "Cash_Collision_Warning": total_draft_po_amount > float(weekly_otb_limit),
         "Status": liquidity_status,
-        "Action_Brief": action_brief
+        "Action_Brief": action_brief,
     }
 
-def print_cfo_morning_brief(financials: dict):
-    """
-    Formats the data into the 'CFO Sandwich' style requested in the Audit docs.
-    (Professional Term -> Plain English -> Cash Impact)
-    """
-    print("\n" + "="*60)
-    print("  GOVNR: DAILY STRATEGIC COMPLIANCE BRIEF")
-    print("="*60)
-    print("\n[Liquidity Constraint Alert] / Cash Collision Warning")
-    
-    print(f"-> Bank Balance (True Cash):    ${financials['Cash_Position']:,.2f}")
-    print(f"-> Accounts Payable (1-15d):    ${financials['Upcoming_AP']:,.2f}")
-    print(f"-> Operating Reserve (10%):     ${financials['Operating_Reserve']:,.2f}")
-    
-    print("-" * 60)
-    print(f" SAFE SPENDING LIMIT (OTB):   ${financials['Safe_Spending_Limit_OTB']:,.2f}")
-    print(f" PENDING DRAFT POs:           ${financials['Total_PO_Exposure']:,.2f}")
-    print("\n" + financials['Status'])
-    print(f"Action: {financials['Action_Brief']}")
-    print("="*60 + "\n")
 
-# --- EXECUTION BLOCK MUST BE FLUSH LEFT ---
+def print_cfo_morning_brief(financials: dict):
+    print("\n" + "=" * 60)
+    print("  GOVNR: DAILY STRATEGIC COMPLIANCE BRIEF")
+    print("=" * 60)
+    print("\n[Rolling OTB vs Draft PO Exposure]")
+    print(f"-> Weekly OTB Limit:              ${financials['Weekly_OTB_Limit']:,.2f}")
+    print(f"-> Total Draft POs (7-day roll): ${financials['Total_Draft_PO_Amount']:,.2f}")
+    print("-" * 60)
+    print("\n" + financials["Status"])
+    print(f"Action: {financials['Action_Brief']}")
+    print("=" * 60 + "\n")
+
+
 if __name__ == "__main__":
-    # Import our previous parsers to get the actual Draft PO exposure
     from engine.netsuite_parser import ingest_po_activity
 
-    # 1. Get the pending POs from NetSuite CSV
     df_po_raw = ingest_po_activity(client_uuid="client_test_001")
 
-    # 2. Run the Cash Logic with our proxies
-    # Let's say they have $35k in cash, but $28k in bills due next week.
-    financials_test = calculate_working_capital(
-        df_pending_pos=df_po_raw,
-        proxy_cash_balance=35000.00,
-        proxy_upcoming_ap=28000.00
-    )
+    financials_test = calculate_working_capital(df_pending_pos=df_po_raw, weekly_otb_limit=100_000.00)
 
-    # 3. Print the Brief
     print_cfo_morning_brief(financials_test)

@@ -1,8 +1,9 @@
 import os
 import sys
-import polars as pl
 import hashlib
 from datetime import date
+
+import polars as pl
 import psycopg2
 import toml
 import uuid
@@ -10,42 +11,48 @@ import uuid
 # --- DEFENSIVE PATHING ---
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
 NETSUITE_DIR = os.path.dirname(ENGINE_DIR)
-GOVNR_DIR = os.path.dirname(NETSUITE_DIR) # Root Govnr_Platform
+GOVNR_DIR = os.path.dirname(NETSUITE_DIR)
 SECRETS_PATH = os.path.join(GOVNR_DIR, ".streamlit", "secrets.toml")
 
-from engine.fitment_rules import get_fitment_expr
-
 CATEGORY_MAP = {
-    "alt": "Alternators", "alternator": "Alternators",
-    "brk": "Brakes & Rotors", "brake": "Brakes & Rotors", "pad": "Brakes & Rotors",
-    "spk": "Ignition", "spark": "Ignition",
-    "str": "Suspension", "strut": "Suspension",
-    "flt": "Filters", "filter": "Filters"
+    "alt": "Alternators",
+    "alternator": "Alternators",
+    "brk": "Brakes & Rotors",
+    "brake": "Brakes & Rotors",
+    "pad": "Brakes & Rotors",
+    "spk": "Ignition",
+    "spark": "Ignition",
+    "str": "Suspension",
+    "strut": "Suspension",
+    "flt": "Filters",
+    "filter": "Filters",
 }
 
+
 def extract_part_category(title: str) -> str:
-    if not title: return "Other/Misc"
+    if not title:
+        return "Other/Misc"
     title_lower = title.lower()
     for keyword, clean_category in CATEGORY_MAP.items():
         if keyword in title_lower:
             return clean_category
     return "Other/Misc"
 
+
 def _get_db_connection():
-    """Securely connects to DigitalOcean using Cloud Environment Variables."""
     db_url = os.environ.get("DATABASE_URL")
-    
-    # Fallback for local Streamlit testing if env var isn't set
+
     if not db_url:
         if os.path.exists(SECRETS_PATH):
             with open(SECRETS_PATH, "r") as f:
                 secrets = toml.load(f)
             db_url = secrets.get("DATABASE_URL")
-            
+
     if not db_url:
         raise ValueError("DATABASE_URL environment variable is missing. Vault connection aborted.")
-        
+
     return psycopg2.connect(db_url)
+
 
 def is_valid_uuid(val):
     try:
@@ -54,51 +61,47 @@ def is_valid_uuid(val):
     except ValueError:
         return False
 
-# ==========================================
-# 3. THE MASTER HARVESTER LOGIC
-# ==========================================
 
 def harvest_proprietary_metrics(
-    client_uuid: str, 
-    df_master: pl.DataFrame, 
-    financials: dict, 
+    client_uuid: str,
+    df_master: pl.DataFrame,
+    financials: dict,
     df_po_alerts: pl.DataFrame,
-    liquidity_source: str = "MANUAL_STATIC"
+    liquidity_source: str = "MANUAL_STATIC",
 ):
     if df_master.is_empty():
         return
 
-    today_str = str(date.today()) 
+    today_str = str(date.today())
 
-    # --- VAULT 1: FINANCIAL BENCHMARK (DIGITALOCEAN DB) ---
-    total_capital = df_master["Capital_Deployed"].sum()
-    
+    total_capital = float(df_master["Location_Capital_Deployed"].sum() or 0.0)
+
     if total_capital > 0 and is_valid_uuid(client_uuid):
-        
-        # COVERT IP INJECTION: Apply the Regex exclusively for the backend vault
-        df_ip_eval = df_master.with_columns(get_fitment_expr().alias("Max_Fitment_Year"))
-        
-        dead_stock_val = df_ip_eval.filter((pl.col("Annual_Velocity") == 0) & (pl.col("Capital_Deployed") > 0))["Capital_Deployed"].sum()
-        obsolete_stock_val = df_ip_eval.filter((pl.col("Max_Fitment_Year") <= 2011) & (pl.col("Capital_Deployed") > 0))["Capital_Deployed"].sum()
-        
-        total_cogs = (df_ip_eval["Annual_Velocity"] * df_ip_eval["Unit_Cost"]).sum()
-        total_revenue = (df_ip_eval["Annual_Velocity"] * df_ip_eval["Price"]).sum()
-        
+        dead_stock_val = float(
+            df_master.filter(
+                (pl.col("Annual_Sold").fill_null(0.0) == 0) & (pl.col("Location_Capital_Deployed") > 0)
+            )["Location_Capital_Deployed"].sum()
+            or 0.0
+        )
+        obsolete_stock_val = 0.0
+
+        total_cogs = float((df_master["Annual_Sold"].fill_null(0.0) * df_master["Unit_Average_Cost"]).sum() or 0.0)
+        total_revenue = float((df_master["Annual_Sold"].fill_null(0.0) * df_master["Unit_Base_Price"]).sum() or 0.0)
+
         turnover_ratio = total_cogs / total_capital if total_capital > 0 else 0.0
         gross_margin_pct = ((total_revenue - total_cogs) / total_revenue * 100) if total_revenue > 0 else 0.0
-        
-        valid_gmroi = df_ip_eval.filter(pl.col("GMROI") > 0) if "GMROI" in df_ip_eval.columns else pl.DataFrame()
-        avg_gmroi = valid_gmroi["GMROI"].mean() if not valid_gmroi.is_empty() else 0.0
-        
-        cash_balance = financials.get('Cash_Position', 0.0)
+
+        valid_gmroi = df_master.filter(pl.col("GMROI") > 0) if "GMROI" in df_master.columns else pl.DataFrame()
+        avg_gmroi = float(valid_gmroi["GMROI"].mean()) if not valid_gmroi.is_empty() else 0.0
+
+        vault_cash_field = float(financials.get("Total_Draft_PO_Amount", 0.0))
 
         conn = None
         cursor = None
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
-            
-            # --- VAULT 1: UPSERT Client Metrics ---
+
             upsert_query = """
                 INSERT INTO client_metrics_history (
                     client_uuid, date_recorded, total_capital_deployed, inventory_turnover,
@@ -114,33 +117,43 @@ def harvest_proprietary_metrics(
                     obsolete_stock_val = EXCLUDED.obsolete_stock_val,
                     cash_balance = EXCLUDED.cash_balance;
             """
-            cursor.execute(upsert_query, (
-                client_uuid, today_str, float(total_capital), float(turnover_ratio), 
-                float(gross_margin_pct), float(avg_gmroi), float(dead_stock_val), 
-                float(obsolete_stock_val), float(cash_balance)
-            ))
-            
-            # --- VAULT 2: THE DEMAND RADAR (PUSHED TO DIGITALOCEAN) ---
-            df_radar = df_ip_eval.with_columns([
-                pl.col("Title").map_elements(extract_part_category, return_dtype=pl.String).alias("Part_Category")
-            ])
+            cursor.execute(
+                upsert_query,
+                (
+                    client_uuid,
+                    today_str,
+                    total_capital,
+                    turnover_ratio,
+                    gross_margin_pct,
+                    avg_gmroi,
+                    dead_stock_val,
+                    obsolete_stock_val,
+                    vault_cash_field,
+                ),
+            )
+
+            df_radar = df_master.with_columns(
+                pl.col("Item_Description").map_elements(extract_part_category, return_dtype=pl.String).alias("Part_Category")
+            )
 
             df_radar_cleaned = df_radar.filter(
-                (pl.col("Part_Category") != "Other/Misc") & 
-                (pl.col("Max_Fitment_Year") != 9999) & 
-                (pl.col("Capital_Deployed") > 0) 
+                (pl.col("Part_Category") != "Other/Misc") & (pl.col("Location_Capital_Deployed") > 0)
             )
 
             if not df_radar_cleaned.is_empty():
-                client_hash = hashlib.sha256(client_uuid.encode('utf-8')).hexdigest()[:12]
-                
-                df_radar_aggregated = df_radar_cleaned.group_by(["Part_Category", "Max_Fitment_Year"]).agg([
-                    pl.col("Qty_On_Hand").sum().alias("Regional_Stock_Count"),
-                    pl.col("Annual_Velocity").sum().alias("Regional_Velocity"),
-                    pl.col("Capital_Deployed").sum().alias("Regional_Capital_Deployed"), 
-                    (pl.col("Qty_Available") - pl.col("Target_Stock")).sum().alias("Regional_Surplus_Deficit") 
-                ])
-                
+                client_hash = hashlib.sha256(client_uuid.encode("utf-8")).hexdigest()[:12]
+
+                df_radar_aggregated = df_radar_cleaned.group_by(["Part_Category"]).agg(
+                    [
+                        pl.col("Quantity_On_Hand").sum().alias("Regional_Stock_Count"),
+                        pl.col("Annual_Sold").fill_null(0.0).sum().alias("Regional_Velocity"),
+                        pl.col("Location_Capital_Deployed").sum().alias("Regional_Capital_Deployed"),
+                        (pl.col("Quantity_Available").fill_null(0.0) - pl.col("Target_Stock_Level").fill_null(0.0))
+                        .sum()
+                        .alias("Regional_Surplus_Deficit"),
+                    ]
+                )
+
                 radar_insert_query = """
                     INSERT INTO demand_radar_vault (
                         date_recorded, client_hash, region, part_category, max_fitment_year,
@@ -153,17 +166,26 @@ def harvest_proprietary_metrics(
                         regional_capital_deployed = EXCLUDED.regional_capital_deployed,
                         regional_surplus_deficit = EXCLUDED.regional_surplus_deficit;
                 """
-                
+
                 for row in df_radar_aggregated.iter_rows(named=True):
-                    cursor.execute(radar_insert_query, (
-                        today_str, client_hash, "South", row["Part_Category"], row["Max_Fitment_Year"],
-                        float(row["Regional_Stock_Count"]), float(row["Regional_Velocity"]),
-                        float(row["Regional_Capital_Deployed"]), float(row["Regional_Surplus_Deficit"])
-                    ))
+                    cursor.execute(
+                        radar_insert_query,
+                        (
+                            today_str,
+                            client_hash,
+                            "South",
+                            row["Part_Category"],
+                            0,
+                            float(row["Regional_Stock_Count"]),
+                            float(row["Regional_Velocity"]),
+                            float(row["Regional_Capital_Deployed"]),
+                            float(row["Regional_Surplus_Deficit"]),
+                        ),
+                    )
 
             conn.commit()
-            print("[Govnr Cloud Vault] Financial Telemetry and Demand Radar safely secured in DigitalOcean Database.")
-            
+            print("[Govnr Cloud Vault] Financial telemetry and demand radar safely secured in database.")
+
         except Exception as e:
             if conn:
                 conn.rollback()
@@ -175,4 +197,4 @@ def harvest_proprietary_metrics(
                 conn.close()
 
     elif not is_valid_uuid(client_uuid):
-        print(f"[Govnr Sandbox] Invalid UUID '{client_uuid}'. Skipping Cloud Database injection.")
+        print(f"[Govnr Sandbox] Invalid UUID '{client_uuid}'. Skipping cloud database injection.")

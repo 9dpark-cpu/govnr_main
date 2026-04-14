@@ -1,5 +1,6 @@
 import os
 import sys
+
 import polars as pl
 
 # --- DEFENSIVE PATHING ---
@@ -10,14 +11,18 @@ if BASE_DIR not in sys.path:
 from engine.netsuite_parser import ingest_inventory_snapshot, ingest_po_activity
 from engine.logic_governor import enrich_inventory_health, audit_purchase_orders
 from engine.logic_cash import calculate_working_capital
-from engine.logic_advanced_erp import calculate_abc_and_gmroi, generate_transfer_manifest, generate_tax_mitigation_plan
+from engine.logic_advanced_erp import (
+    calculate_abc_and_gmroi,
+    generate_transfer_manifest,
+    generate_tax_mitigation_plan,
+)
 from engine.financial_math import calculate_financial_health
-from engine.ip_harvester import harvest_proprietary_metrics  
+from engine.ip_harvester import harvest_proprietary_metrics
 
-def run_daily_governor(client_uuid: str, proxy_cash: float, proxy_ap: float):
+
+def run_daily_governor(client_uuid: str, weekly_otb_limit: float = 100_000.0):
     print(f"[{client_uuid}] Initializing Govnr Pipeline...\n")
 
-    # 1. INGESTION PHASE
     try:
         df_inv_raw = ingest_inventory_snapshot(client_uuid)
         df_po_raw = ingest_po_activity(client_uuid)
@@ -25,88 +30,78 @@ def run_daily_governor(client_uuid: str, proxy_cash: float, proxy_ap: float):
         print(e)
         return
 
-    # 2. FINANCIAL MATH PHASE (Data Health Scan)
-    generated_buffers = calculate_financial_health(df_inv_raw)
+    generated_buffers = calculate_financial_health(
+        df_inv_raw,
+        df_po_raw,
+        weekly_otb_limit=float(weekly_otb_limit),
+    )
 
-    # 3. INVENTORY HEALTH & GOVERNOR PHASE (Toxic Stock Checks)
     df_inv_health = enrich_inventory_health(df_inv_raw)
     df_po_alerts = audit_purchase_orders(df_inv_health, df_po_raw)
 
-    # 4. ADVANCED ERP PHASE (ABC, GMROI, Transfers, Tax)
     df_advanced = calculate_abc_and_gmroi(df_inv_health)
     df_manifest = generate_transfer_manifest(df_advanced)
     tax_writeoff = generate_tax_mitigation_plan(df_inv_health)
 
-    # 5. CASH LOGIC PHASE (Open-To-Buy limits)
-    financials = calculate_working_capital(df_po_raw, proxy_cash, proxy_ap)
+    financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(weekly_otb_limit))
 
-    # --- UNIFIED TERMINAL REPORT ---
-    print("\n" + "="*75)
+    print("\n" + "=" * 75)
     print("  GOVNR: DAILY STRATEGIC COMPLIANCE BRIEF")
-    print("="*75)
-    
-    # Section A: Cash Position
-    print("\n[LIQUIDITY CONSTRAINT & OTB LIMITS]")
-    print(f" Bank Balance (True Cash):    ${financials['Cash_Position']:,.2f}")
-    print(f" Accounts Payable (1-15d):    ${financials['Upcoming_AP']:,.2f}")
-    print(f" Operating Reserve (10%):     ${financials['Operating_Reserve']:,.2f}")
+    print("=" * 75)
+
+    print("\n[ROLLING OTB & DRAFT PO EXPOSURE]")
+    print(f" Weekly OTB Limit (CFO):       ${financials['Weekly_OTB_Limit']:,.2f}")
+    print(f" Draft PO Total (7-day roll): ${financials['Total_Draft_PO_Amount']:,.2f}")
     print("-" * 50)
-    print(f"  SAFE SPENDING LIMIT:        ${financials['Safe_Spending_Limit_OTB']:,.2f}")
-    print(f"  PENDING DRAFT POs:          ${financials['Total_PO_Exposure']:,.2f}")
-    print(f"\n {financials['Status']}")
+    print(f" {financials['Status']}")
     print(f" Action: {financials['Action_Brief']}")
-    
-    # Section B: PO Interventions
+
     print("\n[PURCHASE ORDER INTERVENTION REQUIRED]")
     if not df_po_alerts.is_empty():
         df_action_needed = df_po_alerts.filter(pl.col("Governor_Action") != " APPROVED")
         if df_action_needed.height > 0:
-            with pl.Config(tbl_rows=10, tbl_cols=6, fmt_str_lengths=40):
-                print(df_action_needed.select(["PO_Number", "SKU", "Total_Amount", "Governor_Action"]))
-            print("\n Recommendation: Cancel the flagged Toxic Stock lines to instantly clear your Cash Collision.")
+            cols = ["PO_Number", "Item_Identifier", "Order_Total_Amount", "Governor_Action"]
+            print(df_action_needed.select([c for c in cols if c in df_action_needed.columns]).write_csv())
+            print("\n Recommendation: Resolve flagged lines before releasing cash.")
         else:
-            print("  All pending POs represent healthy inventory.")
+            print("  All pending PO lines passed automated governor checks.")
     else:
-        print(" No pending Purchase Orders detected today.")
+        print(" No pending purchase orders detected today.")
 
-    # Section C: Advanced Operations
     print("\n[LOGISTICS & TAX DIRECTIVES]")
     if not df_manifest.is_empty():
-        print(f"  Action Required: Execute {df_manifest.height} internal warehouse transfers to prevent unnecessary procurement.")
+        print(
+            f"  Action Required: Execute {df_manifest.height} internal warehouse transfers to prevent unnecessary procurement."
+        )
     print(f"  Tax Mitigation: Provide your CPA with the projected ${tax_writeoff:,.2f} write-off potential for Q4.")
 
-    # Section D: Asset Productivity (ABC & GMROI)
     print("\n[ASSET PRODUCTIVITY & ABC CLASSIFICATION]")
     if not df_advanced.is_empty():
-        # Count SKUs by ABC Class
-        abc_counts = df_advanced.group_by("ABC_Class").agg(pl.col("SKU").n_unique().alias("Count")).sort("ABC_Class")
+        abc_counts = (
+            df_advanced.group_by("ABC_Class").agg(pl.col("Item_Identifier").n_unique().alias("Count")).sort("ABC_Class")
+        )
         print("  Inventory Criticality Breakdown:")
         for row in abc_counts.iter_rows():
-            print(f"    -> {row[0]}: {row[1]} SKUs")
-        
-        # Calculate Average GMROI for the fleet (excluding zeros/negatives)
+            print(f"    -> {row[0]}: {row[1]} items")
+
         valid_gmroi = df_advanced.filter(pl.col("GMROI") > 0)
         if not valid_gmroi.is_empty():
             avg_gmroi = valid_gmroi["GMROI"].mean()
             print(f"  Average Fleet GMROI: {avg_gmroi:.2f} (Gross Margin Return on Inventory)")
 
-        
         print("\n[PROPRIETARY DATA VAULT]")
         harvest_proprietary_metrics(
-            client_uuid=client_uuid, 
-            df_master=df_advanced, 
-            financials=financials, 
+            client_uuid=client_uuid,
+            df_master=df_advanced,
+            financials=financials,
             df_po_alerts=df_po_alerts,
-            liquidity_source="MANUAL_STATIC" 
+            liquidity_source="ROLLING_OTB",
         )
+
+    print("=" * 75 + "\n")
+
     return generated_buffers
 
-    print("="*75 + "\n")
 
 if __name__ == "__main__":
-    # 1. Static API-Free Proxies for Local Testing
-    proxy_cash = 35000.0
-    proxy_ap = 28000.0
-    
-    # 2. Inject static data into the Governor
-    run_daily_governor("client_test_001", proxy_cash=proxy_cash, proxy_ap=proxy_ap)
+    run_daily_governor("client_test_001", weekly_otb_limit=100_000.0)

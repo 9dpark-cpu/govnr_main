@@ -254,8 +254,7 @@ def enterprise_ingestion_admin_page():
                 inventory_filename_pattern,
                 po_filename_pattern,
                 delete_remote_after_success,
-                proxy_cash,
-                proxy_ap,
+                weekly_otb_limit,
                 max_file_size_mb
             FROM client_ingestion_config
             WHERE client_uuid = %s
@@ -310,10 +309,16 @@ def enterprise_ingestion_admin_page():
             )
         )
 
-        col10, col11, col12 = st.columns(3)
-        proxy_cash = float(col10.number_input("Proxy Cash ($)", value=float(existing.get("proxy_cash") or 35000.0), step=1000.0))
-        proxy_ap = float(col11.number_input("Proxy A/P ($)", value=float(existing.get("proxy_ap") or 28000.0), step=1000.0))
-        delete_remote_after_success = col12.checkbox(
+        col10, col11 = st.columns(2)
+        weekly_otb_limit = float(
+            col10.number_input(
+                "Weekly OTB limit ($)",
+                value=float(existing.get("weekly_otb_limit") or 100000.0),
+                step=1000.0,
+                help="CFO-approved maximum draft PO exposure for a rolling 7-day window.",
+            )
+        )
+        delete_remote_after_success = col11.checkbox(
             "Delete remote after success",
             value=bool(existing.get("delete_remote_after_success", False)),
             help="Keep disabled until your workflow is fully validated.",
@@ -344,13 +349,12 @@ def enterprise_ingestion_admin_page():
                             inventory_filename_pattern,
                             po_filename_pattern,
                             delete_remote_after_success,
-                            proxy_cash,
-                            proxy_ap,
+                            weekly_otb_limit,
                             max_file_size_mb,
                             updated_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
                         )
                         ON CONFLICT (client_uuid) DO UPDATE SET
                             enabled = EXCLUDED.enabled,
@@ -364,8 +368,7 @@ def enterprise_ingestion_admin_page():
                             inventory_filename_pattern = EXCLUDED.inventory_filename_pattern,
                             po_filename_pattern = EXCLUDED.po_filename_pattern,
                             delete_remote_after_success = EXCLUDED.delete_remote_after_success,
-                            proxy_cash = EXCLUDED.proxy_cash,
-                            proxy_ap = EXCLUDED.proxy_ap,
+                            weekly_otb_limit = EXCLUDED.weekly_otb_limit,
                             max_file_size_mb = EXCLUDED.max_file_size_mb,
                             updated_at = CURRENT_TIMESTAMP
                         """,
@@ -381,8 +384,7 @@ def enterprise_ingestion_admin_page():
                             inventory_pattern.strip() or "inventory_snapshot",
                             po_pattern.strip() or "po_activity",
                             delete_remote_after_success,
-                            proxy_cash,
-                            proxy_ap,
+                            weekly_otb_limit,
                             max_file_size_mb,
                         ),
                     )
@@ -485,8 +487,7 @@ def enterprise_ingestion_admin_page():
                                 with redirect_stdout(report_buffer):
                                     run_daily_governor(
                                         client_uuid=client_uuid,
-                                        proxy_cash=float(proxy_cash),
-                                        proxy_ap=float(proxy_ap),
+                                        weekly_otb_limit=float(weekly_otb_limit),
                                     )
                                 out = report_buffer.getvalue()
                                 st.subheader("Govnr pipeline output")
@@ -605,26 +606,35 @@ def main_dashboard():
 
     elif app_mode == "ERP Data Health Scan":
         st.title("ERP: Data Health Scan")
-        
+
         tier = st.session_state.get("account_tier", "diagnostic")
-        
+        weekly_otb_scan = 100000.0
+
         if tier == "diagnostic":
             st.info("DIAGNOSTIC TIER: Manual Upload Mode")
             st.write("Drag and drop your ERP CSVs below for an instant Data Health Scan.")
-            
-            user_cash = 35000.0
-            user_ap = 28000.0
+            weekly_otb_scan = st.number_input(
+                "Weekly OTB limit ($)",
+                value=100000.0,
+                step=1000.0,
+                key="diag_weekly_otb_limit",
+                help="Rolling 7-day draft PO total is compared to this CFO-approved ceiling.",
+            )
             st.markdown("Upgrade to Enterprise to unlock automated daily webhooks and advanced Open-To-Buy (OTB) guardrails.")
-            
+
         elif tier == "enterprise":
             st.success("ENTERPRISE TIER")
-            
+
             st.markdown("---")
-            st.subheader("Liquidity and Working Capital")
-            colA, colB = st.columns(2)
-            user_cash = colA.number_input("Current Cash Balance ($)", value=35000.0, step=1000.0)
-            user_ap = colB.number_input("Upcoming A/P (1-15 days) ($)", value=28000.0, step=1000.0)
-                
+            st.subheader("Rolling OTB guardrail")
+            weekly_otb_scan = st.number_input(
+                "Weekly OTB limit ($)",
+                value=100000.0,
+                step=1000.0,
+                key="ent_weekly_otb_limit",
+                help="Rolling 7-day draft PO total is compared to this CFO-approved ceiling.",
+            )
+
             st.markdown("---")
             st.subheader("Automated Daily Sync Settings")
             st.write("Set your ERP Daily Inventory Status Saved Search to automatically email this address every morning at 6:00 AM:")
@@ -651,18 +661,22 @@ def main_dashboard():
             st.subheader("Inventory Data Mapping")
             
             inv_required_fields = {
-                "SKU": "Item Name/Number",
-                "Title": "Description",
-                "Location": "Location",
-                "Qty_Available": "Available",
-                "Qty_Committed": "Quantity Committed",
-                "Unit_Cost": "Average Cost",
-                "Price": "Base Price",
+                "Item_Identifier": "Item Name/Number",
+                "Item_Description": "Description",
+                "Item_Location": "Location",
+                "Quantity_Available": "Available",
+                "Quantity_Committed": "Quantity Committed",
+                "Unit_Average_Cost": "Average Cost",
+                "Unit_Base_Price": "Base Price",
                 "Last_Sales_Date": "Last Sales Date",
-                "Target_Stock": "Preferred Stock Level",
-                "Vendor": "Vendor",
+                "Target_Stock_Level": "Preferred Stock Level",
+                "Preferred_Vendor": "Vendor",
                 "Item_Type": "Type",
-                "Annual_Velocity": "365 Qty Sold"
+                "Annual_Sold": "365 Qty Sold",
+                "Replacement_Item_Identifier": "Replaced By",
+                "UPC_Code": "UPC Code",
+                "Manufacturer_Part_Number": "MPN",
+                "Manufacturer_Brand": "Brand",
             }
             
             saved_mapping = st.session_state.get("inventory_column_mapping") or {}
@@ -689,9 +703,12 @@ def main_dashboard():
                 
                 po_required_fields = {
                     "PO_Number": "PO Number",
-                    "SKU": "Item Name/Number",
-                    "Qty_Ordered": "Quantity",
-                    "Total_Amount": "Amount"
+                    "Date_Created": "Date Created",
+                    "Order_Status": "Status",
+                    "Purchase_Order_Vendor": "Vendor",
+                    "Item_Identifier": "Item Name/Number",
+                    "Quantity_Ordered": "Quantity",
+                    "Order_Total_Amount": "Amount",
                 }
                 
                 map_col3, map_col4 = st.columns(2)
@@ -708,7 +725,16 @@ def main_dashboard():
                     )
             
             if st.button("Confirm Mapping & Execute Data Health Scan"):
-                expected_numeric_fields =["Qty_Available", "Qty_Committed", "Unit_Cost", "Price", "Target_Stock", "Annual_Velocity", "Qty_Ordered", "Total_Amount"]
+                expected_numeric_fields = [
+                    "Quantity_Available",
+                    "Quantity_Committed",
+                    "Unit_Average_Cost",
+                    "Unit_Base_Price",
+                    "Target_Stock_Level",
+                    "Annual_Sold",
+                    "Quantity_Ordered",
+                    "Order_Total_Amount",
+                ]
                 
                 inv_errors = run_sanity_checks(raw_inv_df, mapped_inv_columns, expected_numeric_fields)
                 po_errors =[]
@@ -749,54 +775,72 @@ def main_dashboard():
                             os.remove(po_path)
                             
                     from main import run_daily_governor
-                    
+
                     report_buffer = io.StringIO()
                     with redirect_stdout(report_buffer):
-                        run_daily_governor(client_uuid=st.session_state["client_uuid"], proxy_cash=user_cash, proxy_ap=user_ap)
-                    
+                        buffers = run_daily_governor(
+                            client_uuid=st.session_state["client_uuid"],
+                            weekly_otb_limit=float(weekly_otb_scan),
+                        )
+
                     terminal_output = report_buffer.getvalue()
-                    
+
                     st.subheader("Govnr Terminal Output")
                     st.code(terminal_output, language="markdown")
 
                     try:
+                        qoh = pl.max_horizontal(
+                            pl.col("Quantity_Available").cast(pl.Float64, strict=False).fill_null(0.0)
+                            + pl.col("Quantity_Committed").cast(pl.Float64, strict=False).fill_null(0.0),
+                            0.0,
+                        )
                         df_calc = clean_inv_df.with_columns([
-                            (pl.max_horizontal(pl.col("Qty_Available").cast(pl.Float64, strict=False), 0) * pl.col("Unit_Cost").cast(pl.Float64, strict=False)).alias("Cap_Deployed"),
-                            (pl.col("Annual_Velocity").cast(pl.Float64, strict=False) * pl.col("Unit_Cost").cast(pl.Float64, strict=False)).alias("COGS"),
-                            (pl.col("Annual_Velocity").cast(pl.Float64, strict=False) * pl.col("Price").cast(pl.Float64, strict=False)).alias("Revenue")
+                            (qoh * pl.col("Unit_Average_Cost").cast(pl.Float64, strict=False)).alias("Cap_Deployed"),
+                            (
+                                pl.col("Annual_Sold").cast(pl.Float64, strict=False).fill_null(0.0)
+                                * pl.col("Unit_Average_Cost").cast(pl.Float64, strict=False)
+                            ).alias("COGS"),
+                            (
+                                pl.col("Annual_Sold").cast(pl.Float64, strict=False).fill_null(0.0)
+                                * pl.col("Unit_Base_Price").cast(pl.Float64, strict=False)
+                            ).alias("Revenue"),
                         ])
-                        
+
                         total_cap = df_calc["Cap_Deployed"].sum() or 0.0
-                        dead_val = df_calc.filter(pl.col("Annual_Velocity") == 0)["Cap_Deployed"].sum() or 0.0
+                        dead_val = df_calc.filter(pl.col("Annual_Sold").fill_null(0.0) == 0)["Cap_Deployed"].sum() or 0.0
                         total_cogs = df_calc["COGS"].sum() or 0.0
                         total_rev = df_calc["Revenue"].sum() or 0.0
-                        
+
                         turnover = total_cogs / total_cap if total_cap > 0 else 0.0
                         margin = ((total_rev - total_cogs) / total_rev * 100) if total_rev > 0 else 0.0
-                        
+
                         auth.save_cfo_metrics(st.session_state["client_uuid"], tier, total_cap, dead_val, turnover, margin, "Tier A")
                         st.success("Financial metrics securely logged to Govnr Vault.")
                     except Exception as e:
                         st.error(f"Internal Metrics Logging Error: {e}")
-                    
+
                     st.subheader("Generated Data Health Scan Deliverables")
-                    
-                    if isinstance(terminal_output, dict):
-                        # Fallback in case terminal_output was overridden
-                        buffers = terminal_output
-                    else:
-                        # Extract returned buffers from main.py
-                        from main import run_daily_governor
-                        # We execute without redirect_stdout to capture the return value silently
-                        buffers = run_daily_governor(client_uuid=st.session_state["client_uuid"], proxy_cash=user_cash, proxy_ap=user_ap)
+
+                    pdf_key = "Govnr_Executive_Brief.pdf"
+                    pdf_bytes = buffers.get(pdf_key)
+                    if pdf_bytes:
+                        st.download_button(
+                            label="Download CFO Strategic Brief (PDF)",
+                            data=pdf_bytes,
+                            file_name=pdf_key,
+                            mime="application/pdf",
+                            key="download_cfo_strategic_brief_pdf",
+                        )
 
                     for file_name, file_bytes in buffers.items():
-                        mime_type = "application/pdf" if file_name.endswith(".pdf") else "text/csv"
+                        if file_name == pdf_key:
+                            continue
                         st.download_button(
                             label=f"Download {file_name}",
                             data=file_bytes,
                             file_name=file_name,
-                            mime=mime_type
+                            mime="text/csv",
+                            key=f"dl_csv_{file_name}",
                         )
     elif app_mode == "Enterprise Ingestion Admin":
         enterprise_ingestion_admin_page()
