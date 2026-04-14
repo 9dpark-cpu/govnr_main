@@ -90,15 +90,19 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
         right_on="Replacement_Item_Identifier",
         how="left",
     )
-    df_audit = df_audit.with_columns([
-        pl.col("Legacy_On_Hand_Total").fill_null(0.0),
-        pl.col("Legacy_Item_Identifiers").fill_null(pl.lit([])),
-    ])
+    df_audit = df_audit.with_columns(pl.col("Legacy_On_Hand_Total").fill_null(0.0))
+
+    # Polars 1.x uses list[str] for implode(); list.join is not reliable across versions.
+    def _join_legacy_cell(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (list, tuple)):
+            return ", ".join(str(x) for x in value)
+        return str(value)
 
     df_audit = df_audit.with_columns(
-        pl.when(pl.col("Legacy_Item_Identifiers").is_null())
-        .then(pl.lit(""))
-        .otherwise(pl.col("Legacy_Item_Identifiers").list.join(", "))
+        pl.col("Legacy_Item_Identifiers")
+        .map_elements(_join_legacy_cell, return_dtype=pl.Utf8)
         .alias("_legacy_ids_display")
     )
 
