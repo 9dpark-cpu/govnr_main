@@ -8,6 +8,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from engine.polars_list_compat import flatten_list_columns_to_utf8_for_csv, preview_cell
+
 
 def generate_audit_csv_buffers(
     df_dead: pl.DataFrame,
@@ -30,6 +32,7 @@ def generate_audit_csv_buffers(
         if not df_loss.is_empty():
             parts.append(df_loss.with_columns(pl.lit("Selling at a Loss").alias("Alert_Type")))
         df_combined_integrity = pl.concat(parts, how="diagonal")
+        df_combined_integrity = flatten_list_columns_to_utf8_for_csv(df_combined_integrity)
         buffers["Report_2_cost_integrity.csv"] = df_combined_integrity.write_csv().encode("utf-8")
 
     datasets = [
@@ -39,7 +42,8 @@ def generate_audit_csv_buffers(
 
     for filename, df in datasets:
         if not df.is_empty():
-            buffers[filename] = df.write_csv().encode("utf-8")
+            df_out = flatten_list_columns_to_utf8_for_csv(df)
+            buffers[filename] = df_out.write_csv().encode("utf-8")
 
     if not df_transfer.is_empty() or not df_cost_variance.is_empty():
         parts_r4 = []
@@ -52,6 +56,7 @@ def generate_audit_csv_buffers(
                 df_cost_variance.with_columns(pl.lit("Interbranch Cost Difference").alias("Alert_Type"))
             )
         df_r4 = pl.concat(parts_r4, how="diagonal")
+        df_r4 = flatten_list_columns_to_utf8_for_csv(df_r4)
         buffers["Report_4_regional_disparity.csv"] = df_r4.write_csv().encode("utf-8")
 
     return buffers
@@ -128,7 +133,7 @@ def print_cfo_report(
         row = df_dead.sort("Location_Capital_Deployed", descending=True).row(0, named=True)
         print("   1. [DEAD STOCK]")
         print(
-            f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | ${row['Location_Capital_Deployed']:,.2f} Trapped"
+            f"      - {row['Item_Identifier']} | {preview_cell(row.get('Item_Description'), 25)} | ${row['Location_Capital_Deployed']:,.2f} Trapped"
         )
         print("        (Reason: zero trailing velocity with no active replacement demand)\n")
 
@@ -139,7 +144,7 @@ def print_cfo_report(
         row = df_int_exp.sort("Retail_Exposure", descending=True).row(0, named=True)
         print("   2. [MISSING / $0 COST]")
         print(
-            f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | ${row['Retail_Exposure']:,.2f} Exposure"
+            f"      - {row['Item_Identifier']} | {preview_cell(row.get('Item_Description'), 25)} | ${row['Retail_Exposure']:,.2f} Exposure"
         )
         print(f"        (Reason: unit average cost is ${row['Unit_Average_Cost']:,.2f})\n")
 
@@ -159,15 +164,15 @@ def print_cfo_report(
         qty_1 = item_rows[1, "Quantity_On_Hand"] if item_rows.height > 1 else 0
 
         print("   3. [WAREHOUSE TRANSFER ALERT]")
-        print(f"      - {top_item} | {str(title)[:25]} | ${total_cap:,.2f} Stranded")
+        print(f"      - {top_item} | {preview_cell(title, 25)} | ${total_cap:,.2f} Stranded")
         print(
-            f"        (Reason: {qty_0} units in {str(loc_0)[:15]}; {qty_1} units in {str(loc_1)[:15]}; days-supply imbalance)\n"
+            f"        (Reason: {qty_0} units in {preview_cell(loc_0, 15)}; {qty_1} units in {preview_cell(loc_1, 15)}; days-supply imbalance)\n"
         )
 
     if not df_neg.is_empty():
         row = df_neg.sort("Quantity_On_Hand", descending=False).row(0, named=True)
         print("   4. [DATA INTEGRITY]")
-        print(f"      - {row['Item_Identifier']} | {str(row['Item_Description'])[:25]} | SYSTEM DRIFT")
+        print(f"      - {row['Item_Identifier']} | {preview_cell(row.get('Item_Description'), 25)} | SYSTEM DRIFT")
         print(f"        (Reason: negative on-hand ({row['Quantity_On_Hand']} units) before clamp policy)\n")
 
     print("=" * 75)

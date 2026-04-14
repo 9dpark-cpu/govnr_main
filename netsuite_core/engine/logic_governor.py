@@ -9,6 +9,17 @@ if BASE_DIR not in sys.path:
 import polars as pl
 from datetime import date
 
+from engine.polars_list_compat import coerce_scalar_string_columns
+
+_GOVERNOR_STRING_COLS = (
+    "Item_Identifier",
+    "Item_Location",
+    "Item_Description",
+    "Replacement_Item_Identifier",
+    "Preferred_Vendor",
+    "Item_Type",
+)
+
 
 def enrich_inventory_health(df_inv: pl.DataFrame) -> pl.DataFrame:
     """
@@ -20,9 +31,7 @@ def enrich_inventory_health(df_inv: pl.DataFrame) -> pl.DataFrame:
 
     current_date = date.today()
 
-    df_inv = df_inv.with_columns([
-        pl.col("Replacement_Item_Identifier").cast(pl.String).str.strip_chars().fill_null("")
-    ])
+    df_inv = coerce_scalar_string_columns(df_inv, _GOVERNOR_STRING_COLS)
 
     df_vel = df_inv.group_by("Item_Identifier").agg(
         pl.col("Annual_Sold").fill_null(0.0).sum().alias("Global_Annual_Sold")
@@ -61,6 +70,11 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
     if df_po.is_empty():
         print("[Govnr Logic] No pending POs to audit today.")
         return df_po
+
+    df_po = coerce_scalar_string_columns(
+        df_po,
+        ("PO_Number", "Order_Status", "Purchase_Order_Vendor", "Item_Identifier"),
+    )
 
     df_legacy = (
         df_inv_enriched.filter(

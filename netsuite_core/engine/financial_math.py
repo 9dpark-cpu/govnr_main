@@ -9,8 +9,21 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from engine.polars_list_compat import coerce_scalar_string_columns
 from engine.report_generator import generate_audit_csv_buffers, print_cfo_report
 from engine.report_generator_pdf import generate_cfo_pdf
+
+_STRING_COLS_FOR_ENGINE = (
+    "Item_Identifier",
+    "Item_Location",
+    "Item_Description",
+    "Replacement_Item_Identifier",
+    "Preferred_Vendor",
+    "Item_Type",
+    "UPC_Code",
+    "Manufacturer_Part_Number",
+    "Manufacturer_Brand",
+)
 
 
 def _rolling_week_po_total(df_po: pl.DataFrame) -> float:
@@ -32,13 +45,7 @@ def calculate_financial_health(
 ):
     current_date = date.today()
 
-    df_master = df_inv.with_columns([
-        pl.col("Item_Identifier").cast(pl.String).str.strip_chars(),
-        pl.col("Item_Location").cast(pl.String).str.strip_chars(),
-        pl.col("Replacement_Item_Identifier").cast(pl.String).str.strip_chars().fill_null(""),
-    ])
-
-    df_master = df_master.with_columns([
+    df_master = coerce_scalar_string_columns(df_inv, _STRING_COLS_FOR_ENGINE).with_columns([
         pl.max_horizontal(pl.col("Quantity_Available").fill_null(0) + pl.col("Quantity_Committed").fill_null(0), 0.0).alias(
             "Quantity_On_Hand"
         ),

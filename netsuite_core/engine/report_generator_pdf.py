@@ -1,3 +1,7 @@
+"""
+CFO PDF uses only scalar Python inputs (no Polars). Numeric report fields must be
+pre-aggregated in financial_math; do not pass raw DataFrame cells here (avoids list[str] in strings).
+"""
 import io
 from datetime import datetime
 
