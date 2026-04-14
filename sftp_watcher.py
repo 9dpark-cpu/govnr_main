@@ -18,6 +18,7 @@ NETSUITE_DIR = os.path.join(BASE_DIR, "netsuite_core")
 if NETSUITE_DIR not in sys.path:
     sys.path.insert(0, NETSUITE_DIR)
 
+from enterprise_ingestion_schema import apply_enterprise_ingestion_schema
 from main import run_daily_governor
 
 
@@ -59,6 +60,8 @@ def fetch_enabled_configs():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        apply_enterprise_ingestion_schema(cursor)
+        conn.commit()
         cursor.execute(
             """
             SELECT

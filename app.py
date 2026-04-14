@@ -236,6 +236,12 @@ def enterprise_ingestion_admin_page():
                 st.error(f"Migration failed: {e}")
         st.stop()
 
+    try:
+        auth.ensure_enterprise_ingestion_tables()
+    except Exception as e:
+        st.error(f"Schema migration failed: {e}")
+        st.stop()
+
     client_uuid = st.session_state["client_uuid"]
 
     conn = auth.get_db_connection()
@@ -674,24 +680,42 @@ def main_dashboard():
                 "Item_Type": "Type",
                 "Annual_Sold": "365 Qty Sold",
                 "Replacement_Item_Identifier": "Replaced By",
+            }
+            inv_optional_ip_fields = {
                 "UPC_Code": "UPC Code",
                 "Manufacturer_Part_Number": "MPN",
                 "Manufacturer_Brand": "Brand",
             }
-            
+
             saved_mapping = st.session_state.get("inventory_column_mapping") or {}
             mapped_inv_columns = {}
-            
+
             map_col1, map_col2 = st.columns(2)
             for i, (govnr_field, expected_ns_name) in enumerate(inv_required_fields.items()):
                 default_index = get_best_match_index(govnr_field, expected_ns_name, raw_inv_df.columns, saved_mapping)
-                    
+
                 target_col = map_col1 if i % 2 == 0 else map_col2
                 mapped_inv_columns[govnr_field] = target_col.selectbox(
                     f"Select column for {govnr_field}:",
                     options=inv_options,
                     index=default_index,
-                    key=f"map_inv_{govnr_field}"
+                    key=f"map_inv_{govnr_field}",
+                )
+
+            st.caption(
+                "Optional (IP / enrichment only): map when your export includes these columns. "
+                "The Data Health Scan runs without them; Govnr fills blanks on ingest."
+            )
+            mapped_inv_optional = {}
+            map_opt1, map_opt2 = st.columns(2)
+            for i, (govnr_field, expected_ns_name) in enumerate(inv_optional_ip_fields.items()):
+                default_index = get_best_match_index(govnr_field, expected_ns_name, raw_inv_df.columns, saved_mapping)
+                target_col = map_opt1 if i % 2 == 0 else map_opt2
+                mapped_inv_optional[govnr_field] = target_col.selectbox(
+                    f"Optional — {govnr_field}:",
+                    options=inv_options,
+                    index=default_index,
+                    key=f"map_inv_opt_{govnr_field}",
                 )
 
             mapped_po_columns = {}
@@ -737,29 +761,37 @@ def main_dashboard():
                 ]
                 
                 inv_errors = run_sanity_checks(raw_inv_df, mapped_inv_columns, expected_numeric_fields)
-                po_errors =[]
+                po_errors = []
                 if po_file is not None:
                     po_errors = run_sanity_checks(raw_po_df, mapped_po_columns, expected_numeric_fields)
-                    
+
                 all_errors = inv_errors + po_errors
-                
+
                 if all_errors:
                     st.error("Data Health Scan halted due to Mapping errors. Please correct the fields below:")
                     for err in all_errors:
                         st.warning(err)
                     st.stop()
-                    
+
                 with st.spinner("Executing Govnr logic..."):
-                    
+                    select_token = "--- Select Column ---"
+                    inv_rename_map = {k: v for k, v in mapped_inv_columns.items()}
+                    for k, v in mapped_inv_optional.items():
+                        if v != select_token:
+                            inv_rename_map[k] = v
+
                     combined_db_mapping = mapped_inv_columns.copy()
+                    for k, v in mapped_inv_optional.items():
+                        if v != select_token:
+                            combined_db_mapping[k] = v
                     if mapped_po_columns:
                         for k, v in mapped_po_columns.items():
                             combined_db_mapping[f"PO_{k}"] = v
-                            
+
                     auth.save_column_mapping(st.session_state["client_uuid"], combined_db_mapping)
                     st.session_state["inventory_column_mapping"] = combined_db_mapping
-                    
-                    clean_inv_df = safe_polars_rename(raw_inv_df, mapped_inv_columns)
+
+                    clean_inv_df = safe_polars_rename(raw_inv_df, inv_rename_map)
                     
                     inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
                     os.makedirs(inbound_dir, exist_ok=True)
