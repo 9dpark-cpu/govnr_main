@@ -219,7 +219,7 @@ def _log_ingestion_run_row(client_uuid: str, file_name: str, file_hash: str, sta
 
 
 def enterprise_ingestion_admin_page():
-    st.title("Enterprise Ingestion Admin")
+    st.title("ERP SFTP Connections")
     st.caption("Configure SFTP ingestion settings for the authenticated client and review recent ingestion runs.")
 
     if not auth.enterprise_ingestion_tables_exist():
@@ -591,10 +591,10 @@ def erp_integration_settings_page():
     )
     from engine.netsuite_parser import ANNUAL_SOLD_REQUIRED_BACKEND, INVENTORY_REQUIRED_BACKEND, PO_REQUIRED_BACKEND
 
-    st.title("ERP Integration Settings")
+    st.title("Data Mapping & Rules")
     st.caption(
         "Upload sample CSVs, map columns, and save. Diagnostic accounts keep automated SFTP disabled; "
-        "stored mappings and OTB limits still drive the math engine and manual Data Health Scan."
+        "stored mappings and OTB limits still drive the math engine and Manual Execution."
     )
     client_uuid = st.session_state["client_uuid"]
     cfg = fetch_ingestion_config(client_uuid)
@@ -797,7 +797,7 @@ def erp_integration_settings_page():
 
         st.success(
             "Mapping configuration and OTB limit saved to client_ingestion_config. "
-            "Local inbound CSVs were updated for the next Data Health Scan."
+            "Local inbound CSVs were updated for the next Manual Execution."
         )
 
 
@@ -816,9 +816,9 @@ def main_dashboard():
         [
             "Welcome",
             "Executive Dashboard",
-            "ERP Integration Settings",
-            "ERP Data Health Scan",
-            "Enterprise Ingestion Admin",
+            "Data Mapping & Rules",
+            "Manual Execution",
+            "ERP SFTP Connections",
         ],
         key="govnr_nav_module",
     )
@@ -848,7 +848,7 @@ def main_dashboard():
         conn.close()
 
         if not records:
-            st.info("No historical data found. Please run a Data Health Scan to generate your first data point.")
+            st.info("No historical data found. Please run Manual Execution to generate your first data point.")
         else:
             df_history = pd.DataFrame(records)
             latest = df_history.iloc[-1]
@@ -873,31 +873,30 @@ def main_dashboard():
                 chart_data_turnover = df_history.set_index('date_recorded')[['inventory_turnover']]
                 st.line_chart(chart_data_turnover)
 
-    elif app_mode == "ERP Integration Settings":
+    elif app_mode == "Data Mapping & Rules":
         erp_integration_settings_page()
 
-    elif app_mode == "ERP Data Health Scan":
-        st.title("ERP: Data Health Scan")
+    elif app_mode == "Manual Execution":
+        st.title("Manual Execution")
         tier = st.session_state.get("account_tier", "diagnostic")
 
         st.info(
             "Runs the Govnr engine on CSVs already placed in the secure inbound folder: "
             "**inventory_snapshot.csv**, **annual_sold.csv**, and optionally **po_activity.csv**. "
-            "Use **ERP Integration Settings** to upload samples, map columns, set your Weekly OTB limit, "
+            "Use **Data Mapping & Rules** to upload samples, map columns, set your Weekly OTB limit, "
             "and define SFTP filename patterns."
         )
         if tier == "diagnostic":
             st.caption(
-                "Diagnostic tier: place files in inbound (or save from ERP Integration Settings) and run the scan here."
+                "Diagnostic tier: place files in inbound (or save from Data Mapping & Rules) and run from here."
             )
         else:
-            prefix = st.session_state.get("inbound_email_prefix", "client")
             st.markdown(
-                f"**Enterprise:** automated email ingestion uses `netsuite_{prefix}@inbound.getgovnr.com` "
-                "together with your saved **Enterprise Ingestion Admin** SFTP credentials when enabled."
+                "Enterprise SFTP Pipeline: Automated 6:00 AM ingestion relies on the Port 443 Drop Zone. "
+                "Ensure filename patterns match configuration."
             )
 
-        if st.button("Run Data Health Scan", type="primary", key="btn_run_health_scan"):
+        if st.button("Run Manual Execution", type="primary", key="btn_run_health_scan"):
             from main import run_daily_governor
 
             with st.spinner("Executing Govnr logic…"):
@@ -910,7 +909,7 @@ def main_dashboard():
 
             if result is None:
                 st.error(
-                    "Data Health Scan halted. Ensure mandatory inbound files exist, mappings are saved, "
+                    "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
                     "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
                 )
                 st.stop()
@@ -933,7 +932,7 @@ def main_dashboard():
                 except Exception as e:
                     st.error(f"Internal Metrics Logging Error: {e}")
 
-            st.subheader("Generated Data Health Scan deliverables")
+            st.subheader("Generated Manual Execution deliverables")
 
             pdf_key = "Govnr_Executive_Brief.pdf"
             pdf_bytes = buffers.get(pdf_key)
@@ -956,7 +955,7 @@ def main_dashboard():
                     mime="text/csv",
                     key=f"dl_csv_{file_name}",
                 )
-    elif app_mode == "Enterprise Ingestion Admin":
+    elif app_mode == "ERP SFTP Connections":
         enterprise_ingestion_admin_page()
 
 if __name__ == "__main__":
