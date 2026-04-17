@@ -39,6 +39,7 @@ class ClientConfig:
     sftp_private_key_env_var: Optional[str]
     sftp_inbound_path: str
     inventory_filename_pattern: str
+    annual_sold_filename_pattern: str
     po_filename_pattern: str
     delete_remote_after_success: bool
     weekly_otb_limit: float
@@ -74,6 +75,7 @@ def fetch_enabled_configs():
                 cfg.sftp_private_key_env_var,
                 cfg.sftp_inbound_path,
                 cfg.inventory_filename_pattern,
+                cfg.annual_sold_filename_pattern,
                 cfg.po_filename_pattern,
                 cfg.delete_remote_after_success,
                 cfg.weekly_otb_limit,
@@ -97,6 +99,7 @@ def fetch_enabled_configs():
                     sftp_private_key_env_var=row.get("sftp_private_key_env_var"),
                     sftp_inbound_path=row.get("sftp_inbound_path") or "/inbound",
                     inventory_filename_pattern=row.get("inventory_filename_pattern") or "inventory_snapshot",
+                    annual_sold_filename_pattern=row.get("annual_sold_filename_pattern") or "annual_sold",
                     po_filename_pattern=row.get("po_filename_pattern") or "po_activity",
                     delete_remote_after_success=bool(row.get("delete_remote_after_success")),
                     weekly_otb_limit=float(row.get("weekly_otb_limit") or 100000.0),
@@ -252,6 +255,17 @@ def process_client_config(cfg: ClientConfig):
             print(f"[{cfg.client_uuid}] No inventory file found in {cfg.sftp_inbound_path}")
             return
 
+        as_match = newest_matching_file(sftp, cfg.sftp_inbound_path, cfg.annual_sold_filename_pattern)
+        as_file = as_match[1] if as_match else None
+        if not as_file:
+            msg = (
+                f"No annual_sold CSV found in {cfg.sftp_inbound_path} "
+                f"matching pattern “{cfg.annual_sold_filename_pattern}”."
+            )
+            print(f"[{cfg.client_uuid}] {msg}")
+            log_ingestion_run(cfg.client_uuid, "annual_sold_missing", "nohash", "failed", msg)
+            return
+
         po_match = newest_matching_file(sftp, cfg.sftp_inbound_path, cfg.po_filename_pattern)
         po_file = po_match[1] if po_match else None
 
@@ -270,7 +284,20 @@ def process_client_config(cfg: ClientConfig):
             print(f"[{cfg.client_uuid}] Already processed inventory file: {inv_file}")
             return
 
+        as_remote_path = f"{cfg.sftp_inbound_path.rstrip('/')}/{as_file}"
+        as_bytes = read_remote_file_bytes(sftp, as_remote_path)
+        if len(as_bytes) > max_bytes:
+            as_hash = sha256_bytes(as_bytes)
+            reason = f"annual_sold file exceeds max_file_size_mb={cfg.max_file_size_mb}"
+            quarantine_file(cfg.client_uuid, as_file, as_bytes, reason)
+            log_ingestion_run(cfg.client_uuid, as_file, as_hash, "quarantined", reason)
+            print(f"[{cfg.client_uuid}] Quarantined {as_file}: {reason}")
+            return
+
         write_local_inbound("inventory_snapshot.csv", inv_bytes)
+        write_local_inbound("annual_sold.csv", as_bytes)
+
+        po_local_path = os.path.join(NETSUITE_DIR, "data", "inbound", "po_activity.csv")
         if po_file:
             po_remote_path = f"{cfg.sftp_inbound_path.rstrip('/')}/{po_file}"
             po_bytes = read_remote_file_bytes(sftp, po_remote_path)
@@ -285,11 +312,23 @@ def process_client_config(cfg: ClientConfig):
         else:
             po_bytes = b""
             po_remote_path = None
+            if os.path.exists(po_local_path):
+                os.remove(po_local_path)
 
-        run_daily_governor(
+        pipeline_result = run_daily_governor(
             client_uuid=cfg.client_uuid,
             weekly_otb_limit=cfg.weekly_otb_limit,
         )
+        if pipeline_result is None:
+            log_ingestion_run(
+                cfg.client_uuid,
+                inv_file,
+                inv_hash,
+                "failed",
+                "Govnr engine halted (missing mandatory file, schema drift, or internal error).",
+            )
+            print(f"[{cfg.client_uuid}] Engine run failed after download.")
+            return
 
         # Mark success using inventory hash as the primary idempotency signal.
         log_ingestion_run(cfg.client_uuid, inv_file, inv_hash, "success")

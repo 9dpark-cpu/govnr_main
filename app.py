@@ -258,6 +258,7 @@ def enterprise_ingestion_admin_page():
                 sftp_private_key_env_var,
                 sftp_inbound_path,
                 inventory_filename_pattern,
+                annual_sold_filename_pattern,
                 po_filename_pattern,
                 delete_remote_after_success,
                 weekly_otb_limit,
@@ -314,6 +315,11 @@ def enterprise_ingestion_admin_page():
                 value=int(existing.get("max_file_size_mb") or 150),
             )
         )
+        annual_sold_pattern = st.text_input(
+            "Annual sold filename pattern",
+            value=existing.get("annual_sold_filename_pattern") or "annual_sold",
+            help="Substring match for mandatory 365-day velocity CSV (case-insensitive).",
+        )
 
         col10, col11 = st.columns(2)
         weekly_otb_limit = float(
@@ -353,6 +359,7 @@ def enterprise_ingestion_admin_page():
                             sftp_private_key_env_var,
                             sftp_inbound_path,
                             inventory_filename_pattern,
+                            annual_sold_filename_pattern,
                             po_filename_pattern,
                             delete_remote_after_success,
                             weekly_otb_limit,
@@ -360,7 +367,7 @@ def enterprise_ingestion_admin_page():
                             updated_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
                         )
                         ON CONFLICT (client_uuid) DO UPDATE SET
                             enabled = EXCLUDED.enabled,
@@ -372,6 +379,7 @@ def enterprise_ingestion_admin_page():
                             sftp_private_key_env_var = EXCLUDED.sftp_private_key_env_var,
                             sftp_inbound_path = EXCLUDED.sftp_inbound_path,
                             inventory_filename_pattern = EXCLUDED.inventory_filename_pattern,
+                            annual_sold_filename_pattern = EXCLUDED.annual_sold_filename_pattern,
                             po_filename_pattern = EXCLUDED.po_filename_pattern,
                             delete_remote_after_success = EXCLUDED.delete_remote_after_success,
                             weekly_otb_limit = EXCLUDED.weekly_otb_limit,
@@ -388,6 +396,7 @@ def enterprise_ingestion_admin_page():
                             sftp_private_key_env_var.strip() or None,
                             sftp_inbound_path.strip() or "/inbound",
                             inventory_pattern.strip() or "inventory_snapshot",
+                            annual_sold_pattern.strip() or "annual_sold",
                             po_pattern.strip() or "po_activity",
                             delete_remote_after_success,
                             weekly_otb_limit,
@@ -428,9 +437,9 @@ def enterprise_ingestion_admin_page():
     st.markdown("---")
     st.subheader("Dry run (latest files, no remote delete)")
     st.caption(
-        "Downloads the newest inventory and (if present) PO CSVs from SFTP into the local inbound folder and runs the "
-        "Govnr pipeline. Remote files are never deleted. The pipeline may still write metrics to the database like a "
-        "normal run."
+        "Downloads the newest **inventory** and **annual_sold** CSVs from SFTP (mandatory) and optionally **PO** into "
+        "the local inbound folder, then runs the Govnr pipeline. Remote files are never deleted. The pipeline may still "
+        "write metrics to the database like a normal run."
     )
     if st.button("Dry Run Ingestion (latest files)", key="btn_dry_run_ingestion"):
         if not sftp_host or not sftp_username:
@@ -439,6 +448,7 @@ def enterprise_ingestion_admin_page():
             st.error("Set at least one credential env var name before running.")
         else:
             inv_pat = (inventory_pattern or "inventory_snapshot").strip()
+            as_pat = (annual_sold_pattern or "annual_sold").strip()
             po_pat = (po_pattern or "po_activity").strip()
             inbound = (sftp_inbound_path or "/inbound").strip()
             max_bytes = int(max_file_size_mb) * 1024 * 1024
@@ -466,11 +476,27 @@ def enterprise_ingestion_admin_page():
                             inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
                             os.makedirs(inbound_dir, exist_ok=True)
                             inv_local = os.path.join(inbound_dir, "inventory_snapshot.csv")
+                            as_local = os.path.join(inbound_dir, "annual_sold.csv")
                             po_local = os.path.join(inbound_dir, "po_activity.csv")
                             with open(inv_local, "wb") as f:
                                 f.write(inv_bytes)
 
                             run_pipeline = True
+                            as_file = _sftp_newest_csv_name(sftp, inbound, as_pat)
+                            if not as_file:
+                                st.error(f"No annual_sold CSV found in {inbound} matching pattern “{as_pat}”.")
+                                run_pipeline = False
+                            else:
+                                as_remote = f"{inbound.rstrip('/')}/{as_file}"
+                                with sftp.file(as_remote, "rb") as rf:
+                                    as_bytes = rf.read()
+                                if len(as_bytes) > max_bytes:
+                                    st.error(f"Annual sold file exceeds max size ({max_file_size_mb} MB).")
+                                    run_pipeline = False
+                                else:
+                                    with open(as_local, "wb") as f:
+                                        f.write(as_bytes)
+
                             po_file = _sftp_newest_csv_name(sftp, inbound, po_pat)
                             if po_file:
                                 po_remote = f"{inbound.rstrip('/')}/{po_file}"
@@ -491,21 +517,27 @@ def enterprise_ingestion_admin_page():
 
                                 report_buffer = io.StringIO()
                                 with redirect_stdout(report_buffer):
-                                    run_daily_governor(
+                                    result = run_daily_governor(
                                         client_uuid=client_uuid,
                                         weekly_otb_limit=float(weekly_otb_limit),
                                     )
                                 out = report_buffer.getvalue()
                                 st.subheader("Govnr pipeline output")
                                 st.code(out or "(no stdout captured)", language="text")
+                                if result is None:
+                                    st.error(
+                                        "Pipeline halted (missing mandatory file, schema drift, or engine error). "
+                                        "See output above."
+                                    )
                                 _log_ingestion_run_row(
                                     client_uuid,
                                     inv_file,
                                     inv_hash,
-                                    "dry_run",
-                                    None,
+                                    "dry_run" if result is not None else "failed",
+                                    None if result is not None else "run_daily_governor returned no result",
                                 )
-                                st.success("Dry run completed. Remote SFTP files were not modified.")
+                                if result is not None:
+                                    st.success("Dry run completed. Remote SFTP files were not modified.")
             except Exception as e:
                 err = str(e)
                 st.error(f"Dry run failed: {err}")
@@ -544,6 +576,231 @@ def enterprise_ingestion_admin_page():
     else:
         st.dataframe(pd.DataFrame(run_rows), use_container_width=True)
 
+
+def erp_integration_settings_page():
+    """Persist ERP CSV mappings and Weekly_OTB_Limit to client_ingestion_config for all account tiers."""
+    from engine.erp_config_loader import fetch_ingestion_config, resolve_weekly_otb_limit
+    from engine.erp_mapping_validation import (
+        FLOAT_ANNUAL_SOLD_FIELDS,
+        FLOAT_INVENTORY_FIELDS,
+        FLOAT_PO_FIELDS,
+        SELECT_TOKEN,
+        validate_date_mapped_columns,
+        validate_float_mapped_columns,
+        validate_required_mappings,
+    )
+    from engine.netsuite_parser import ANNUAL_SOLD_REQUIRED_BACKEND, INVENTORY_REQUIRED_BACKEND, PO_REQUIRED_BACKEND
+
+    st.title("ERP Integration Settings")
+    st.caption(
+        "Upload sample CSVs, map columns, and save. Diagnostic accounts keep automated SFTP disabled; "
+        "stored mappings and OTB limits still drive the math engine and manual Data Health Scan."
+    )
+    client_uuid = st.session_state["client_uuid"]
+    cfg = fetch_ingestion_config(client_uuid)
+    w_raw, used_fallback = resolve_weekly_otb_limit(cfg.get("weekly_otb_limit"))
+    if used_fallback:
+        st.warning(
+            "Weekly OTB limit was missing or invalid in the database; showing 100000.00 until you save a valid value."
+        )
+
+    cpat1, cpat2, cpat3 = st.columns(3)
+    inv_pat = cpat1.text_input(
+        "Inventory filename pattern (SFTP match)",
+        value=str(cfg.get("inventory_filename_pattern") or "inventory_snapshot"),
+        help="Substring match for newest CSV on SFTP (case-insensitive).",
+        key="erp_cfg_inv_pat",
+    )
+    as_pat = cpat2.text_input(
+        "Annual sold filename pattern (SFTP match)",
+        value=str(cfg.get("annual_sold_filename_pattern") or "annual_sold"),
+        key="erp_cfg_as_pat",
+    )
+    po_pat = cpat3.text_input(
+        "PO filename pattern (SFTP match)",
+        value=str(cfg.get("po_filename_pattern") or "po_activity"),
+        key="erp_cfg_po_pat",
+    )
+
+    weekly_otb_limit = float(
+        st.number_input(
+            "Weekly OTB limit ($)",
+            value=float(w_raw),
+            min_value=0.0,
+            step=1000.0,
+            help="CFO-approved rolling 7-day draft PO ceiling (stored in client_ingestion_config).",
+            key="erp_cfg_weekly_otb",
+        )
+    )
+
+    st.markdown("---")
+    st.subheader("Sample files for mapping (pre-flight validation only)")
+    inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="erp_fu_inv")
+    as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="erp_fu_as")
+    po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="erp_fu_po")
+
+    if inv_fu is None or as_fu is None:
+        st.info("Upload **inventory** and **annual_sold** sample exports to configure column mappings.")
+        return
+
+    raw_inv = pl.read_csv(inv_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+    raw_as = pl.read_csv(as_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+    raw_po = (
+        pl.read_csv(po_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"]) if po_fu is not None else None
+    )
+
+    inv_fields = {
+        "Item_Identifier": "Item Name/Number",
+        "Item_Description": "Description",
+        "Item_Location": "Location",
+        "Quantity_Available": "Available",
+        "Quantity_Committed": "Quantity Committed",
+        "Unit_Average_Cost": "Average Cost",
+        "Unit_Base_Price": "Base Price",
+        "Last_Sales_Date": "Last Sales Date",
+        "Target_Stock_Level": "Preferred Stock Level",
+        "Preferred_Vendor": "Vendor",
+        "Item_Type": "Type",
+        "Replacement_Item_Identifier": "Replaced By",
+        "UPC_Code": "UPC Code",
+        "Manufacturer_Part_Number": "MPN",
+        "Manufacturer_Brand": "Brand",
+    }
+    as_fields = {
+        "Item_Identifier": "Item Name/Number",
+        "Item_Location": "Location",
+        "Annual_Sold": "365 Qty Sold",
+    }
+    po_fields = {
+        "PO_Number": "PO Number",
+        "Date_Created": "Date Created",
+        "Order_Status": "Status",
+        "Purchase_Order_Vendor": "Vendor",
+        "Item_Identifier": "Item Name/Number",
+        "Quantity_Ordered": "Quantity",
+        "Order_Total_Amount": "Amount",
+    }
+
+    saved_inv = cfg.get("inventory_column_mapping") or {}
+    saved_as = cfg.get("annual_sold_column_mapping") or {}
+    saved_po = cfg.get("po_column_mapping") or {}
+
+    inv_opts = [SELECT_TOKEN] + list(raw_inv.columns)
+    as_opts = [SELECT_TOKEN] + list(raw_as.columns)
+
+    st.subheader("Inventory column mapping")
+    inv_map_ui = {}
+    cols_inv = st.columns(2)
+    for i, (gk, hint) in enumerate(inv_fields.items()):
+        idx = get_best_match_index(gk, hint, raw_inv.columns, saved_inv)
+        inv_map_ui[gk] = cols_inv[i % 2].selectbox(
+            gk,
+            options=inv_opts,
+            index=idx,
+            key=f"erp_map_inv_{gk}",
+        )
+
+    st.subheader("Annual sold column mapping")
+    as_map_ui = {}
+    cols_as = st.columns(3)
+    for i, (gk, hint) in enumerate(as_fields.items()):
+        idx = get_best_match_index(gk, hint, raw_as.columns, saved_as)
+        as_map_ui[gk] = cols_as[i % 3].selectbox(
+            gk,
+            options=as_opts,
+            index=idx,
+            key=f"erp_map_as_{gk}",
+        )
+
+    po_map_ui = {}
+    if raw_po is not None:
+        st.subheader("Purchase order column mapping")
+        po_opts = [SELECT_TOKEN] + list(raw_po.columns)
+        cols_po = st.columns(2)
+        for i, (gk, hint) in enumerate(po_fields.items()):
+            idx = get_best_match_index(gk, hint, raw_po.columns, saved_po)
+            po_map_ui[gk] = cols_po[i % 2].selectbox(
+                gk,
+                options=po_opts,
+                index=idx,
+                key=f"erp_map_po_{gk}",
+            )
+
+    if st.button("Save Mapping Configuration", type="primary", key="erp_save_mappings"):
+
+        def internal_dup(mapping: dict, label: str) -> list[str]:
+            seen: dict[str, str] = {}
+            for k, v in mapping.items():
+                if not v or v == SELECT_TOKEN:
+                    continue
+                if v in seen:
+                    return [f"{label}: CSV column '{v}' is mapped to both '{seen[v]}' and '{k}'."]
+                seen[v] = k
+            return []
+
+        inv_out = {k: v for k, v in inv_map_ui.items() if v != SELECT_TOKEN}
+        as_out = {k: v for k, v in as_map_ui.items() if v != SELECT_TOKEN}
+        po_out = {k: v for k, v in po_map_ui.items() if v != SELECT_TOKEN} if raw_po is not None else {}
+
+        errs: list[str] = []
+        errs.extend(internal_dup(inv_map_ui, "inventory_snapshot"))
+        errs.extend(internal_dup(as_map_ui, "annual_sold"))
+        if raw_po is not None:
+            errs.extend(internal_dup(po_map_ui, "po_activity"))
+
+        errs.extend(validate_required_mappings(inv_map_ui, INVENTORY_REQUIRED_BACKEND, "inventory_snapshot"))
+        errs.extend(validate_required_mappings(as_map_ui, ANNUAL_SOLD_REQUIRED_BACKEND, "annual_sold"))
+        errs.extend(validate_float_mapped_columns(raw_inv, inv_map_ui, FLOAT_INVENTORY_FIELDS, "inventory_snapshot"))
+        errs.extend(
+            validate_date_mapped_columns(raw_inv, inv_map_ui, ("Last_Sales_Date",), "inventory_snapshot")
+        )
+        errs.extend(validate_float_mapped_columns(raw_as, as_map_ui, FLOAT_ANNUAL_SOLD_FIELDS, "annual_sold"))
+
+        if raw_po is not None:
+            errs.extend(validate_required_mappings(po_map_ui, PO_REQUIRED_BACKEND, "po_activity"))
+            errs.extend(validate_float_mapped_columns(raw_po, po_map_ui, FLOAT_PO_FIELDS, "po_activity"))
+            errs.extend(
+                validate_date_mapped_columns(raw_po, po_map_ui, ("Date_Created",), "po_activity")
+            )
+
+        if errs:
+            st.error("Save halted. Fix the issues below.")
+            for msg in errs:
+                st.warning(msg)
+            st.stop()
+
+        auth.upsert_client_ingestion_erp_settings(
+            client_uuid,
+            weekly_otb_limit,
+            inv_out,
+            as_out,
+            po_out,
+            inv_pat.strip(),
+            as_pat.strip(),
+            po_pat.strip(),
+        )
+
+        inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
+        os.makedirs(inbound_dir, exist_ok=True)
+        inv_path = os.path.join(inbound_dir, "inventory_snapshot.csv")
+        as_path = os.path.join(inbound_dir, "annual_sold.csv")
+        po_path = os.path.join(inbound_dir, "po_activity.csv")
+        with open(inv_path, "wb") as f:
+            f.write(inv_fu.getbuffer())
+        with open(as_path, "wb") as f:
+            f.write(as_fu.getbuffer())
+        if po_fu is not None:
+            with open(po_path, "wb") as f:
+                f.write(po_fu.getbuffer())
+        elif os.path.exists(po_path):
+            os.remove(po_path)
+
+        st.success(
+            "Mapping configuration and OTB limit saved to client_ingestion_config. "
+            "Local inbound CSVs were updated for the next Data Health Scan."
+        )
+
+
 def main_dashboard():
     st.sidebar.title(f"{st.session_state['company_name']}")
     if st.sidebar.button("Log Out"):
@@ -556,7 +813,13 @@ def main_dashboard():
     st.sidebar.title("Govnr Navigation")
     app_mode = st.sidebar.selectbox(
         "Select Module",
-        ["Welcome", "Executive Dashboard", "ERP Data Health Scan", "Enterprise Ingestion Admin"],
+        [
+            "Welcome",
+            "Executive Dashboard",
+            "ERP Integration Settings",
+            "ERP Data Health Scan",
+            "Enterprise Ingestion Admin",
+        ],
         key="govnr_nav_module",
     )
 
@@ -610,270 +873,89 @@ def main_dashboard():
                 chart_data_turnover = df_history.set_index('date_recorded')[['inventory_turnover']]
                 st.line_chart(chart_data_turnover)
 
+    elif app_mode == "ERP Integration Settings":
+        erp_integration_settings_page()
+
     elif app_mode == "ERP Data Health Scan":
         st.title("ERP: Data Health Scan")
-
         tier = st.session_state.get("account_tier", "diagnostic")
-        weekly_otb_scan = 100000.0
 
+        st.info(
+            "Runs the Govnr engine on CSVs already placed in the secure inbound folder: "
+            "**inventory_snapshot.csv**, **annual_sold.csv**, and optionally **po_activity.csv**. "
+            "Use **ERP Integration Settings** to upload samples, map columns, set your Weekly OTB limit, "
+            "and define SFTP filename patterns."
+        )
         if tier == "diagnostic":
-            st.info("DIAGNOSTIC TIER: Manual Upload Mode")
-            st.write("Drag and drop your ERP CSVs below for an instant Data Health Scan.")
-            weekly_otb_scan = st.number_input(
-                "Weekly OTB limit ($)",
-                value=100000.0,
-                step=1000.0,
-                key="diag_weekly_otb_limit",
-                help="Rolling 7-day draft PO total is compared to this CFO-approved ceiling.",
-            )
-            st.markdown("Upgrade to Enterprise to unlock automated daily webhooks and advanced Open-To-Buy (OTB) guardrails.")
-
-        elif tier == "enterprise":
-            st.success("ENTERPRISE TIER")
-
-            st.markdown("---")
-            st.subheader("Rolling OTB guardrail")
-            weekly_otb_scan = st.number_input(
-                "Weekly OTB limit ($)",
-                value=100000.0,
-                step=1000.0,
-                key="ent_weekly_otb_limit",
-                help="Rolling 7-day draft PO total is compared to this CFO-approved ceiling.",
-            )
-
-            st.markdown("---")
-            st.subheader("Automated Daily Sync Settings")
-            st.write("Set your ERP Daily Inventory Status Saved Search to automatically email this address every morning at 6:00 AM:")
-            prefix = st.session_state.get("inbound_email_prefix", "client")
-            st.code(f"netsuite_{prefix}@inbound.getgovnr.com", language="text")
-            st.write("Our Webhook Engine will automatically catch the file, apply your saved column mapping, run the math, and update your dashboard without any manual uploads.")
-            st.markdown("---")
-
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("1. Inventory Snapshot")
-            inv_file = st.file_uploader("Upload inventory_snapshot.csv", type=["csv"])
-            
-        with col2:
-            st.subheader("2. PO Activity (Optional)")
-            po_file = st.file_uploader("Upload po_activity.csv", type=["csv"])
-
-        if inv_file is not None:
-            raw_inv_df = pl.read_csv(inv_file, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-            inv_options =["--- Select Column ---"] + list(raw_inv_df.columns)
-            
-            st.markdown("---")
-            st.subheader("Inventory Data Mapping")
-            
-            inv_required_fields = {
-                "Item_Identifier": "Item Name/Number",
-                "Item_Description": "Description",
-                "Item_Location": "Location",
-                "Quantity_Available": "Available",
-                "Quantity_Committed": "Quantity Committed",
-                "Unit_Average_Cost": "Average Cost",
-                "Unit_Base_Price": "Base Price",
-                "Last_Sales_Date": "Last Sales Date",
-                "Target_Stock_Level": "Preferred Stock Level",
-                "Preferred_Vendor": "Vendor",
-                "Item_Type": "Type",
-                "Annual_Sold": "365 Qty Sold",
-                "Replacement_Item_Identifier": "Replaced By",
-            }
-            inv_optional_ip_fields = {
-                "UPC_Code": "UPC Code",
-                "Manufacturer_Part_Number": "MPN",
-                "Manufacturer_Brand": "Brand",
-            }
-
-            saved_mapping = st.session_state.get("inventory_column_mapping") or {}
-            mapped_inv_columns = {}
-
-            map_col1, map_col2 = st.columns(2)
-            for i, (govnr_field, expected_ns_name) in enumerate(inv_required_fields.items()):
-                default_index = get_best_match_index(govnr_field, expected_ns_name, raw_inv_df.columns, saved_mapping)
-
-                target_col = map_col1 if i % 2 == 0 else map_col2
-                mapped_inv_columns[govnr_field] = target_col.selectbox(
-                    f"Select column for {govnr_field}:",
-                    options=inv_options,
-                    index=default_index,
-                    key=f"map_inv_{govnr_field}",
-                )
-
             st.caption(
-                "Optional (IP / enrichment only): map when your export includes these columns. "
-                "The Data Health Scan runs without them; Govnr fills blanks on ingest."
+                "Diagnostic tier: place files in inbound (or save from ERP Integration Settings) and run the scan here."
             )
-            mapped_inv_optional = {}
-            map_opt1, map_opt2 = st.columns(2)
-            for i, (govnr_field, expected_ns_name) in enumerate(inv_optional_ip_fields.items()):
-                default_index = get_best_match_index(govnr_field, expected_ns_name, raw_inv_df.columns, saved_mapping)
-                target_col = map_opt1 if i % 2 == 0 else map_opt2
-                mapped_inv_optional[govnr_field] = target_col.selectbox(
-                    f"Optional — {govnr_field}:",
-                    options=inv_options,
-                    index=default_index,
-                    key=f"map_inv_opt_{govnr_field}",
+        else:
+            prefix = st.session_state.get("inbound_email_prefix", "client")
+            st.markdown(
+                f"**Enterprise:** automated email ingestion uses `netsuite_{prefix}@inbound.getgovnr.com` "
+                "together with your saved **Enterprise Ingestion Admin** SFTP credentials when enabled."
+            )
+
+        if st.button("Run Data Health Scan", type="primary", key="btn_run_health_scan"):
+            from main import run_daily_governor
+
+            with st.spinner("Executing Govnr logic…"):
+                report_buffer = io.StringIO()
+                with redirect_stdout(report_buffer):
+                    result = run_daily_governor(client_uuid=st.session_state["client_uuid"])
+
+            st.subheader("Govnr terminal output")
+            st.code(report_buffer.getvalue(), language="markdown")
+
+            if result is None:
+                st.error(
+                    "Data Health Scan halted. Ensure mandatory inbound files exist, mappings are saved, "
+                    "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
+                )
+                st.stop()
+
+            buffers = result["buffers"]
+            metrics = result.get("metrics")
+
+            if metrics:
+                try:
+                    auth.save_cfo_metrics(
+                        st.session_state["client_uuid"],
+                        tier,
+                        float(metrics["total_capital_deployed"]),
+                        float(metrics["dead_stock_val"]),
+                        float(metrics["inventory_turnover"]),
+                        float(metrics["gross_margin_pct"]),
+                        "Tier A",
+                    )
+                    st.success("Financial metrics securely logged to Govnr Vault.")
+                except Exception as e:
+                    st.error(f"Internal Metrics Logging Error: {e}")
+
+            st.subheader("Generated Data Health Scan deliverables")
+
+            pdf_key = "Govnr_Executive_Brief.pdf"
+            pdf_bytes = buffers.get(pdf_key)
+            if pdf_bytes:
+                st.download_button(
+                    label="Download CFO Strategic Brief (PDF)",
+                    data=pdf_bytes,
+                    file_name=pdf_key,
+                    mime="application/pdf",
+                    key="download_cfo_strategic_brief_pdf",
                 )
 
-            mapped_po_columns = {}
-            if po_file is not None:
-                st.markdown("---")
-                st.subheader("Purchase Order Data Mapping")
-                raw_po_df = pl.read_csv(po_file, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-                po_options =["--- Select Column ---"] + list(raw_po_df.columns)
-                
-                po_required_fields = {
-                    "PO_Number": "PO Number",
-                    "Date_Created": "Date Created",
-                    "Order_Status": "Status",
-                    "Purchase_Order_Vendor": "Vendor",
-                    "Item_Identifier": "Item Name/Number",
-                    "Quantity_Ordered": "Quantity",
-                    "Order_Total_Amount": "Amount",
-                }
-                
-                map_col3, map_col4 = st.columns(2)
-                for i, (govnr_field, expected_ns_name) in enumerate(po_required_fields.items()):
-                    db_key = f"PO_{govnr_field}"
-                    default_index = get_best_match_index(db_key, expected_ns_name, raw_po_df.columns, saved_mapping)
-                        
-                    target_col = map_col3 if i % 2 == 0 else map_col4
-                    mapped_po_columns[govnr_field] = target_col.selectbox(
-                        f"Select column for PO {govnr_field}:",
-                        options=po_options,
-                        index=default_index,
-                        key=f"map_po_{govnr_field}"
-                    )
-            
-            if st.button("Confirm Mapping & Execute Data Health Scan"):
-                expected_numeric_fields = [
-                    "Quantity_Available",
-                    "Quantity_Committed",
-                    "Unit_Average_Cost",
-                    "Unit_Base_Price",
-                    "Target_Stock_Level",
-                    "Annual_Sold",
-                    "Quantity_Ordered",
-                    "Order_Total_Amount",
-                ]
-                
-                inv_errors = run_sanity_checks(raw_inv_df, mapped_inv_columns, expected_numeric_fields)
-                po_errors = []
-                if po_file is not None:
-                    po_errors = run_sanity_checks(raw_po_df, mapped_po_columns, expected_numeric_fields)
-
-                all_errors = inv_errors + po_errors
-
-                if all_errors:
-                    st.error("Data Health Scan halted due to Mapping errors. Please correct the fields below:")
-                    for err in all_errors:
-                        st.warning(err)
-                    st.stop()
-
-                with st.spinner("Executing Govnr logic..."):
-                    select_token = "--- Select Column ---"
-                    inv_rename_map = {k: v for k, v in mapped_inv_columns.items()}
-                    for k, v in mapped_inv_optional.items():
-                        if v != select_token:
-                            inv_rename_map[k] = v
-
-                    combined_db_mapping = mapped_inv_columns.copy()
-                    for k, v in mapped_inv_optional.items():
-                        if v != select_token:
-                            combined_db_mapping[k] = v
-                    if mapped_po_columns:
-                        for k, v in mapped_po_columns.items():
-                            combined_db_mapping[f"PO_{k}"] = v
-
-                    auth.save_column_mapping(st.session_state["client_uuid"], combined_db_mapping)
-                    st.session_state["inventory_column_mapping"] = combined_db_mapping
-
-                    clean_inv_df = safe_polars_rename(raw_inv_df, inv_rename_map)
-                    
-                    inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
-                    os.makedirs(inbound_dir, exist_ok=True)
-                    inv_path = os.path.join(inbound_dir, "inventory_snapshot.csv")
-                    clean_inv_df.write_csv(inv_path)
-                    
-                    po_path = os.path.join(inbound_dir, "po_activity.csv")
-                    if po_file is not None:
-                        clean_po_df = safe_polars_rename(raw_po_df, mapped_po_columns)
-                        clean_po_df.write_csv(po_path)
-                    else:
-                        if os.path.exists(po_path):
-                            os.remove(po_path)
-                            
-                    from main import run_daily_governor
-
-                    report_buffer = io.StringIO()
-                    with redirect_stdout(report_buffer):
-                        buffers = run_daily_governor(
-                            client_uuid=st.session_state["client_uuid"],
-                            weekly_otb_limit=float(weekly_otb_scan),
-                        )
-
-                    terminal_output = report_buffer.getvalue()
-
-                    st.subheader("Govnr Terminal Output")
-                    st.code(terminal_output, language="markdown")
-
-                    try:
-                        qoh = pl.max_horizontal(
-                            pl.col("Quantity_Available").cast(pl.Float64, strict=False).fill_null(0.0)
-                            + pl.col("Quantity_Committed").cast(pl.Float64, strict=False).fill_null(0.0),
-                            0.0,
-                        )
-                        df_calc = clean_inv_df.with_columns([
-                            (qoh * pl.col("Unit_Average_Cost").cast(pl.Float64, strict=False)).alias("Cap_Deployed"),
-                            (
-                                pl.col("Annual_Sold").cast(pl.Float64, strict=False).fill_null(0.0)
-                                * pl.col("Unit_Average_Cost").cast(pl.Float64, strict=False)
-                            ).alias("COGS"),
-                            (
-                                pl.col("Annual_Sold").cast(pl.Float64, strict=False).fill_null(0.0)
-                                * pl.col("Unit_Base_Price").cast(pl.Float64, strict=False)
-                            ).alias("Revenue"),
-                        ])
-
-                        total_cap = df_calc["Cap_Deployed"].sum() or 0.0
-                        dead_val = df_calc.filter(pl.col("Annual_Sold").fill_null(0.0) == 0)["Cap_Deployed"].sum() or 0.0
-                        total_cogs = df_calc["COGS"].sum() or 0.0
-                        total_rev = df_calc["Revenue"].sum() or 0.0
-
-                        turnover = total_cogs / total_cap if total_cap > 0 else 0.0
-                        margin = ((total_rev - total_cogs) / total_rev * 100) if total_rev > 0 else 0.0
-
-                        auth.save_cfo_metrics(st.session_state["client_uuid"], tier, total_cap, dead_val, turnover, margin, "Tier A")
-                        st.success("Financial metrics securely logged to Govnr Vault.")
-                    except Exception as e:
-                        st.error(f"Internal Metrics Logging Error: {e}")
-
-                    st.subheader("Generated Data Health Scan Deliverables")
-
-                    pdf_key = "Govnr_Executive_Brief.pdf"
-                    pdf_bytes = buffers.get(pdf_key)
-                    if pdf_bytes:
-                        st.download_button(
-                            label="Download CFO Strategic Brief (PDF)",
-                            data=pdf_bytes,
-                            file_name=pdf_key,
-                            mime="application/pdf",
-                            key="download_cfo_strategic_brief_pdf",
-                        )
-
-                    for file_name, file_bytes in buffers.items():
-                        if file_name == pdf_key:
-                            continue
-                        st.download_button(
-                            label=f"Download {file_name}",
-                            data=file_bytes,
-                            file_name=file_name,
-                            mime="text/csv",
-                            key=f"dl_csv_{file_name}",
-                        )
+            for file_name, file_bytes in buffers.items():
+                if file_name == pdf_key:
+                    continue
+                st.download_button(
+                    label=f"Download {file_name}",
+                    data=file_bytes,
+                    file_name=file_name,
+                    mime="text/csv",
+                    key=f"dl_csv_{file_name}",
+                )
     elif app_mode == "Enterprise Ingestion Admin":
         enterprise_ingestion_admin_page()
 

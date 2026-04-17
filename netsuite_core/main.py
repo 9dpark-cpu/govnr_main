@@ -8,32 +8,79 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from engine.netsuite_parser import ingest_inventory_snapshot, ingest_po_activity
-from engine.logic_governor import enrich_inventory_health, audit_purchase_orders
-from engine.logic_cash import calculate_working_capital
+from engine.erp_config_loader import fetch_ingestion_config, resolve_weekly_otb_limit
+from engine.financial_math import calculate_financial_health
+from engine.govnr_exceptions import MissingFileError, SchemaDriftError
+from engine.ip_harvester import harvest_proprietary_metrics
 from engine.logic_advanced_erp import (
     calculate_abc_and_gmroi,
     generate_transfer_manifest,
     generate_tax_mitigation_plan,
 )
-from engine.financial_math import calculate_financial_health
-from engine.ip_harvester import harvest_proprietary_metrics
+from engine.logic_cash import calculate_working_capital
+from engine.logic_governor import audit_purchase_orders, enrich_inventory_health
+from engine.netsuite_parser import ingest_annual_sold, ingest_inventory_snapshot, ingest_po_activity
 
 
-def run_daily_governor(client_uuid: str, weekly_otb_limit: float = 100_000.0):
+def _compute_cfo_metrics(df: pl.DataFrame) -> dict[str, float] | None:
+    """Dashboard snapshot metrics from merged inventory + Annual_Sold (post-join, pre-enrich)."""
+    if df.is_empty():
+        return None
+    qoh = pl.max_horizontal(pl.col("Quantity_Available") + pl.col("Quantity_Committed"), 0.0)
+    annual = pl.col("Annual_Sold").fill_null(0.0)
+    calc = df.with_columns([
+        (qoh * pl.col("Unit_Average_Cost").fill_null(0.0)).alias("Cap_Deployed"),
+        (annual * pl.col("Unit_Average_Cost").fill_null(0.0)).alias("COGS"),
+        (annual * pl.col("Unit_Base_Price").fill_null(0.0)).alias("Revenue"),
+    ])
+    total_cap = float(calc["Cap_Deployed"].sum() or 0.0)
+    dead_val = float(
+        calc.filter(pl.col("Annual_Sold").fill_null(0.0) == 0.0)["Cap_Deployed"].sum() or 0.0
+    )
+    total_cogs = float(calc["COGS"].sum() or 0.0)
+    total_rev = float(calc["Revenue"].sum() or 0.0)
+    turnover = total_cogs / total_cap if total_cap > 0 else 0.0
+    margin = ((total_rev - total_cogs) / total_rev * 100.0) if total_rev > 0 else 0.0
+    return {
+        "total_capital_deployed": total_cap,
+        "dead_stock_val": dead_val,
+        "inventory_turnover": turnover,
+        "gross_margin_pct": margin,
+    }
+
+
+def run_daily_governor(client_uuid: str, weekly_otb_limit: float | None = None):
     print(f"[{client_uuid}] Initializing Govnr Pipeline...\n")
 
+    cfg = fetch_ingestion_config(client_uuid)
+    if weekly_otb_limit is not None:
+        wlim, used_fallback = resolve_weekly_otb_limit(weekly_otb_limit)
+    else:
+        wlim, used_fallback = resolve_weekly_otb_limit(cfg.get("weekly_otb_limit"))
+    if used_fallback:
+        print(
+            "[Govnr] Weekly_OTB_Limit missing or invalid; using default 100000.00. "
+            "Update ERP Integration Settings to set your CFO-approved ceiling."
+        )
+
     try:
-        df_inv_raw = ingest_inventory_snapshot(client_uuid)
-        df_po_raw = ingest_po_activity(client_uuid)
-    except FileNotFoundError as e:
-        print(e)
-        return
+        df_inv_raw = ingest_inventory_snapshot(client_uuid, erp_config=cfg)
+        df_as = ingest_annual_sold(client_uuid, erp_config=cfg)
+        df_po_raw = ingest_po_activity(client_uuid, erp_config=cfg)
+    except MissingFileError as e:
+        print(str(e))
+        return None
+    except SchemaDriftError as e:
+        print(str(e))
+        return None
+
+    df_inv_raw = df_inv_raw.join(df_as, on=["Item_Identifier", "Item_Location"], how="left")
+    df_inv_raw = df_inv_raw.with_columns(pl.col("Annual_Sold").fill_null(0.0))
 
     generated_buffers = calculate_financial_health(
         df_inv_raw,
         df_po_raw,
-        weekly_otb_limit=float(weekly_otb_limit),
+        weekly_otb_limit=float(wlim),
     )
 
     df_inv_health = enrich_inventory_health(df_inv_raw)
@@ -43,7 +90,7 @@ def run_daily_governor(client_uuid: str, weekly_otb_limit: float = 100_000.0):
     df_manifest = generate_transfer_manifest(df_advanced)
     tax_writeoff = generate_tax_mitigation_plan(df_inv_health)
 
-    financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(weekly_otb_limit))
+    financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(wlim))
 
     print("\n" + "=" * 75)
     print("  GOVNR: DAILY STRATEGIC COMPLIANCE BRIEF")
@@ -100,8 +147,10 @@ def run_daily_governor(client_uuid: str, weekly_otb_limit: float = 100_000.0):
 
     print("=" * 75 + "\n")
 
-    return generated_buffers
+    metrics = _compute_cfo_metrics(df_inv_raw)
+    return {"buffers": generated_buffers, "metrics": metrics}
 
 
 if __name__ == "__main__":
-    run_daily_governor("client_test_001", weekly_otb_limit=100_000.0)
+    out = run_daily_governor("client_test_001", weekly_otb_limit=100_000.0)
+    print("Pipeline result keys:", None if out is None else list(out.keys()))

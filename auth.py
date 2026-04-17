@@ -57,6 +57,141 @@ def ensure_enterprise_ingestion_tables() -> None:
         cursor.close()
         conn.close()
 
+
+def seed_client_ingestion_config_if_absent(client_uuid) -> None:
+    """Create a default client_ingestion_config row for new clients (diagnostic-friendly defaults)."""
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO client_ingestion_config (
+                client_uuid, enabled, sftp_host, sftp_port, sftp_username,
+                sftp_inbound_path, inventory_filename_pattern, annual_sold_filename_pattern, po_filename_pattern,
+                weekly_otb_limit, inventory_column_mapping, annual_sold_column_mapping, po_column_mapping
+            )
+            VALUES (
+                %s, FALSE, '', 22, 'pending_setup',
+                '/inbound', 'inventory_snapshot', 'annual_sold', 'po_activity',
+                100000.00, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb
+            )
+            ON CONFLICT (client_uuid) DO NOTHING
+            """,
+            (client_uuid,),
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def upsert_client_ingestion_erp_settings(
+    client_uuid: str,
+    weekly_otb_limit: float,
+    inventory_column_mapping: dict,
+    annual_sold_column_mapping: dict,
+    po_column_mapping: dict,
+    inventory_filename_pattern: str,
+    annual_sold_filename_pattern: str,
+    po_filename_pattern: str,
+) -> None:
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE client_ingestion_config SET
+                inventory_filename_pattern = %s,
+                annual_sold_filename_pattern = %s,
+                po_filename_pattern = %s,
+                weekly_otb_limit = %s,
+                inventory_column_mapping = %s::jsonb,
+                annual_sold_column_mapping = %s::jsonb,
+                po_column_mapping = %s::jsonb,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE client_uuid = %s
+            """,
+            (
+                inventory_filename_pattern.strip() or "inventory_snapshot",
+                annual_sold_filename_pattern.strip() or "annual_sold",
+                po_filename_pattern.strip() or "po_activity",
+                weekly_otb_limit,
+                json.dumps(inventory_column_mapping or {}),
+                json.dumps(annual_sold_column_mapping or {}),
+                json.dumps(po_column_mapping or {}),
+                client_uuid,
+            ),
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO client_ingestion_config (
+                    client_uuid, enabled, sftp_host, sftp_port, sftp_username,
+                    sftp_inbound_path,
+                    inventory_filename_pattern, annual_sold_filename_pattern, po_filename_pattern,
+                    delete_remote_after_success,
+                    weekly_otb_limit,
+                    inventory_column_mapping, annual_sold_column_mapping, po_column_mapping,
+                    updated_at
+                )
+                VALUES (
+                    %s, FALSE, '', 22, 'pending_setup',
+                    '/inbound',
+                    %s, %s, %s,
+                    FALSE,
+                    %s,
+                    %s::jsonb, %s::jsonb, %s::jsonb,
+                    CURRENT_TIMESTAMP
+                )
+                """,
+                (
+                    client_uuid,
+                    inventory_filename_pattern.strip() or "inventory_snapshot",
+                    annual_sold_filename_pattern.strip() or "annual_sold",
+                    po_filename_pattern.strip() or "po_activity",
+                    weekly_otb_limit,
+                    json.dumps(inventory_column_mapping or {}),
+                    json.dumps(annual_sold_column_mapping or {}),
+                    json.dumps(po_column_mapping or {}),
+                ),
+            )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def fetch_client_ingestion_row(client_uuid: str) -> dict:
+    """Load full client_ingestion_config row as dict (empty dict if missing)."""
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                weekly_otb_limit,
+                inventory_filename_pattern,
+                annual_sold_filename_pattern,
+                po_filename_pattern,
+                inventory_column_mapping,
+                annual_sold_column_mapping,
+                po_column_mapping
+            FROM client_ingestion_config
+            WHERE client_uuid = %s
+            """,
+            (client_uuid,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        return dict(row)
+    finally:
+        cursor.close()
+        conn.close()
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
@@ -80,6 +215,10 @@ def register_new_client(company_name: str, email: str, password: str):
 
         new_client = cursor.fetchone()
         conn.commit()
+        try:
+            seed_client_ingestion_config_if_absent(new_client["client_uuid"])
+        except Exception:
+            pass
         return True, new_client
     except psycopg2.IntegrityError:
         if conn:

@@ -17,9 +17,13 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
             sftp_password VARCHAR(255),
             sftp_inbound_path VARCHAR(255) DEFAULT '/inbound',
             inventory_filename_pattern VARCHAR(255) DEFAULT 'inventory_snapshot',
+            annual_sold_filename_pattern VARCHAR(255) DEFAULT 'annual_sold',
             po_filename_pattern VARCHAR(255) DEFAULT 'po_activity',
             delete_remote_after_success BOOLEAN DEFAULT FALSE,
             weekly_otb_limit NUMERIC(15, 2) DEFAULT 100000.00,
+            inventory_column_mapping JSONB DEFAULT '{}'::jsonb,
+            annual_sold_column_mapping JSONB DEFAULT '{}'::jsonb,
+            po_column_mapping JSONB DEFAULT '{}'::jsonb,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
@@ -54,4 +58,16 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
     )
     cursor.execute(
         "ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'sftp';"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS annual_sold_filename_pattern VARCHAR(255) DEFAULT 'annual_sold';"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS inventory_column_mapping JSONB DEFAULT '{}'::jsonb;"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS annual_sold_column_mapping JSONB DEFAULT '{}'::jsonb;"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS po_column_mapping JSONB DEFAULT '{}'::jsonb;"
     )
