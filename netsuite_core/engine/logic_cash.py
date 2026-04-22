@@ -20,19 +20,32 @@ def calculate_working_capital(
     """
     if df_pending_pos.is_empty():
         total_draft_po_amount = 0.0
+        print("DEBUG OTB: Anchor Date = (no PO rows), Total Sum = 0.0")
     else:
-        anchor_date = df_pending_pos.select(
-            pl.col("Date_Created").cast(pl.Date, strict=False).max().alias("anchor_date")
-        )["anchor_date"].item()
-        if anchor_date is None:
-            anchor_date = date.today()
-        cutoff = anchor_date - timedelta(days=7)
+        # Normalize to calendar dates via string parse so Date / Datetime / CSV strings behave consistently.
         df_eff = df_pending_pos.with_columns(
-            pl.col("Date_Created").cast(pl.Date, strict=False).fill_null(pl.lit(anchor_date)).alias("_eff_date")
+            pl.col("Date_Created")
+            .cast(pl.Utf8)
+            .str.slice(0, 10)
+            .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+            .alias("_eff_date")
         )
-        total_draft_po_amount = float(
-            df_eff.filter(pl.col("_eff_date") >= pl.lit(cutoff))["Order_Total_Amount"].sum()
+        anchor_scalar = df_eff.select(pl.col("_eff_date").max()).to_series()[0]
+        if anchor_scalar is None:
+            anchor_date = date.today()
+        else:
+            anchor_date = anchor_scalar  # max(_eff_date) from strptime is datetime.date
+
+        cutoff = anchor_date - timedelta(days=7)
+        otb_statuses = ["Pending Receipt", "Draft"]
+        df_window = df_eff.filter(
+            pl.col("_eff_date").is_not_null()
+            & (pl.col("_eff_date") >= pl.lit(cutoff))
+            & pl.col("Order_Status").is_in(otb_statuses)
         )
+        total_draft_po_amount = float(df_window["Order_Total_Amount"].sum())
+
+        print(f"DEBUG OTB: Anchor Date = {anchor_date}, Total Sum = {total_draft_po_amount}")
 
     liquidity_status = " BUDGET COMPLIANT"
     action_brief = ""

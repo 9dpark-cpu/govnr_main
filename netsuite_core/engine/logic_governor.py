@@ -11,6 +11,47 @@ from datetime import date
 
 from engine.polars_list_compat import coerce_scalar_string_columns
 
+def _legacy_ids_cell_to_plain_str(value) -> str:
+    """
+    Flatten legacy Item_Identifier list / Series / nested list cells to plain UTF-8
+    for alert strings (no Polars Series repr).
+    """
+    if value is None:
+        return ""
+    if isinstance(value, pl.Series):
+        lst = value.to_list()
+        if not lst:
+            return ""
+        first = lst[0]
+        if isinstance(first, list):
+            return ", ".join(str(x) for x in first) if first else ""
+        return str(first)
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1 and isinstance(value[0], list):
+            inner = value[0]
+            return ", ".join(str(x) for x in inner) if inner else ""
+        return ", ".join(str(x) for x in value)
+    return str(value)
+
+
+def _po_item_id_to_plain_str(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, pl.Series):
+        lst = value.to_list()
+        if not lst:
+            return ""
+        x = lst[0]
+        if isinstance(x, list) and x:
+            return str(x[0])
+        return str(x)
+    if isinstance(value, (list, tuple)):
+        if len(value) == 1 and isinstance(value[0], list) and value[0]:
+            return str(value[0][0])
+        return str(value[0]) if value else ""
+    return str(value)
+
+
 _GOVERNOR_STRING_COLS = (
     "Item_Identifier",
     "Item_Location",
@@ -106,34 +147,31 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
     )
     df_audit = df_audit.with_columns(pl.col("Legacy_On_Hand_Total").fill_null(0.0))
 
-    # Polars 1.x uses list[str] for implode(); list.join is not reliable across versions.
-    def _join_legacy_cell(value) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, pl.Series):
-            vals = value.to_list()
-            if len(vals) == 1 and isinstance(vals[0], list):
-                vals = vals[0]
-            return ", ".join(str(x) for x in vals)
-        if isinstance(value, (list, tuple)):
-            if len(value) == 1 and isinstance(value[0], list):
-                return ", ".join(str(x) for x in value[0])
-            return ", ".join(str(x) for x in value)
-        return str(value)
-
     df_audit = df_audit.with_columns(
         pl.col("Legacy_Item_Identifiers")
-        .map_elements(_join_legacy_cell, return_dtype=pl.Utf8)
+        .map_elements(_legacy_ids_cell_to_plain_str, return_dtype=pl.Utf8)
         .alias("_legacy_ids_display")
+    )
+    df_audit = df_audit.with_columns(
+        pl.col("Item_Identifier")
+        .map_elements(_po_item_id_to_plain_str, return_dtype=pl.Utf8)
+        .alias("_replacement_item_plain")
     )
 
     df_audit = df_audit.with_columns(
         pl.when(pl.col("Legacy_On_Hand_Total") > 0)
         .then(
-            pl.format(
-                "Replacement Item Alert: Recommended to deplete legacy Item_Identifier [{}] before ordering replacement Item_Identifier [{}]",
-                pl.col("_legacy_ids_display"),
-                pl.col("Item_Identifier"),
+            pl.concat_str(
+                [
+                    pl.lit(
+                        "Replacement Item Alert: Recommended to deplete legacy Item_Identifier ["
+                    ),
+                    pl.col("_legacy_ids_display"),
+                    pl.lit("] before ordering replacement Item_Identifier ["),
+                    pl.col("_replacement_item_plain"),
+                    pl.lit("]"),
+                ],
+                separator="",
             )
         )
         .when(pl.col("Stock_Status") == "Dead Stock (>365d)")
@@ -147,8 +185,9 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
         .alias("Governor_Action")
     )
 
-    if "_legacy_ids_display" in df_audit.columns:
-        df_audit = df_audit.drop("_legacy_ids_display")
+    for _tmp in ("_legacy_ids_display", "_replacement_item_plain"):
+        if _tmp in df_audit.columns:
+            df_audit = df_audit.drop(_tmp)
 
     return df_audit
 
