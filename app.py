@@ -907,6 +907,20 @@ def main_dashboard():
             st.subheader("Govnr terminal output")
             st.code(report_buffer.getvalue(), language="markdown")
 
+            if result is not None and result.get("metrics"):
+                m = result["metrics"]
+                st.subheader("Run summary (OTB)")
+                col_otb1, col_otb2 = st.columns(2)
+                col_otb1.metric(
+                    "Weekly OTB limit (CFO)",
+                    f"${float(m.get('weekly_otb_limit', 0)):,.2f}",
+                )
+                col_otb2.metric(
+                    "Rolling 7-day PO exposure",
+                    f"${float(m.get('rolling_po_total', 0)):,.2f}",
+                    help="Same total as the compliance brief and CFO PDF (anchor = max PO Date_Created).",
+                )
+
             if result is None:
                 st.error(
                     "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "

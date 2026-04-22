@@ -147,7 +147,19 @@ def run_daily_governor(client_uuid: str, weekly_otb_limit: float | None = None):
 
     print("=" * 75 + "\n")
 
-    metrics = _compute_cfo_metrics(df_inv_raw)
+    base_metrics = _compute_cfo_metrics(df_inv_raw)
+    if base_metrics is None:
+        base_metrics = {
+            "total_capital_deployed": 0.0,
+            "dead_stock_val": 0.0,
+            "inventory_turnover": 0.0,
+            "gross_margin_pct": 0.0,
+        }
+    metrics = {
+        **base_metrics,
+        "rolling_po_total": float(financials["Total_Draft_PO_Amount"]),
+        "weekly_otb_limit": float(financials["Weekly_OTB_Limit"]),
+    }
     return {"buffers": generated_buffers, "metrics": metrics}
 
 

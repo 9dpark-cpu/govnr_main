@@ -9,6 +9,41 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+_OTB_ROLLING_STATUSES = ("Pending Receipt", "Draft")
+
+
+def compute_rolling_po_exposure_total(df_po: pl.DataFrame) -> float:
+    """
+    Single source of truth for trailing 7-day PO exposure used by OTB / cash collision logic.
+
+    Anchor date is the maximum ``Date_Created`` in the PO export (not system clock).
+    Sums ``Order_Total_Amount`` for rows with status Pending Receipt or Draft in
+    ``[anchor - 7 days, anchor]`` (inclusive on the lower bound via ``>= cutoff``).
+    """
+    if df_po.is_empty():
+        return 0.0
+
+    df_eff = df_po.with_columns(
+        pl.col("Date_Created")
+        .cast(pl.Utf8)
+        .str.slice(0, 10)
+        .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+        .alias("_eff_date")
+    )
+    anchor_scalar = df_eff.select(pl.col("_eff_date").max()).to_series()[0]
+    if anchor_scalar is None:
+        anchor_date = date.today()
+    else:
+        anchor_date = anchor_scalar
+
+    cutoff = anchor_date - timedelta(days=7)
+    df_window = df_eff.filter(
+        pl.col("_eff_date").is_not_null()
+        & (pl.col("_eff_date") >= pl.lit(cutoff))
+        & pl.col("Order_Status").is_in(list(_OTB_ROLLING_STATUSES))
+    )
+    return float(df_window["Order_Total_Amount"].sum())
+
 
 def calculate_working_capital(
     df_pending_pos: pl.DataFrame,
@@ -18,34 +53,7 @@ def calculate_working_capital(
     Rolling 7-day draft PO exposure vs CFO-approved weekly OTB ceiling.
     All rows in the PO export are summed (client saved search is authoritative).
     """
-    if df_pending_pos.is_empty():
-        total_draft_po_amount = 0.0
-        print("DEBUG OTB: Anchor Date = (no PO rows), Total Sum = 0.0")
-    else:
-        # Normalize to calendar dates via string parse so Date / Datetime / CSV strings behave consistently.
-        df_eff = df_pending_pos.with_columns(
-            pl.col("Date_Created")
-            .cast(pl.Utf8)
-            .str.slice(0, 10)
-            .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-            .alias("_eff_date")
-        )
-        anchor_scalar = df_eff.select(pl.col("_eff_date").max()).to_series()[0]
-        if anchor_scalar is None:
-            anchor_date = date.today()
-        else:
-            anchor_date = anchor_scalar  # max(_eff_date) from strptime is datetime.date
-
-        cutoff = anchor_date - timedelta(days=7)
-        otb_statuses = ["Pending Receipt", "Draft"]
-        df_window = df_eff.filter(
-            pl.col("_eff_date").is_not_null()
-            & (pl.col("_eff_date") >= pl.lit(cutoff))
-            & pl.col("Order_Status").is_in(otb_statuses)
-        )
-        total_draft_po_amount = float(df_window["Order_Total_Amount"].sum())
-
-        print(f"DEBUG OTB: Anchor Date = {anchor_date}, Total Sum = {total_draft_po_amount}")
+    total_draft_po_amount = compute_rolling_po_exposure_total(df_pending_pos)
 
     liquidity_status = " BUDGET COMPLIANT"
     action_brief = ""

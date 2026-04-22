@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date
 
 import polars as pl
 
@@ -9,6 +9,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from engine.logic_cash import compute_rolling_po_exposure_total
 from engine.polars_list_compat import coerce_scalar_string_columns
 from engine.report_generator import generate_audit_csv_buffers, print_cfo_report
 from engine.report_generator_pdf import generate_cfo_pdf
@@ -24,18 +25,6 @@ _STRING_COLS_FOR_ENGINE = (
     "Manufacturer_Part_Number",
     "Manufacturer_Brand",
 )
-
-
-def _rolling_week_po_total(df_po: pl.DataFrame) -> float:
-    if df_po.is_empty():
-        return 0.0
-    cutoff = date.today() - timedelta(days=7)
-    df_f = df_po.with_columns(
-        pl.col("Date_Created").fill_null(pl.lit(date.today())).alias("_po_date")
-    )
-    return float(
-        df_f.filter(pl.col("_po_date") >= pl.lit(cutoff))["Order_Total_Amount"].sum()
-    )
 
 
 def calculate_financial_health(
@@ -122,7 +111,7 @@ def calculate_financial_health(
         (sum_location_cogs / total_capital_deployed) if total_capital_deployed > 0 else 0.0
     )
 
-    total_draft_po_amount = _rolling_week_po_total(df_po)
+    total_draft_po_amount = compute_rolling_po_exposure_total(df_po)
     cash_collision = total_draft_po_amount > float(weekly_otb_limit)
 
     df_dead = df_master.filter(non_performing)
