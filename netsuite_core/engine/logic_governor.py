@@ -110,7 +110,14 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
     def _join_legacy_cell(value) -> str:
         if value is None:
             return ""
+        if isinstance(value, pl.Series):
+            vals = value.to_list()
+            if len(vals) == 1 and isinstance(vals[0], list):
+                vals = vals[0]
+            return ", ".join(str(x) for x in vals)
         if isinstance(value, (list, tuple)):
+            if len(value) == 1 and isinstance(value[0], list):
+                return ", ".join(str(x) for x in value[0])
             return ", ".join(str(x) for x in value)
         return str(value)
 

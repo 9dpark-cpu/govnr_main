@@ -21,9 +21,14 @@ def calculate_working_capital(
     if df_pending_pos.is_empty():
         total_draft_po_amount = 0.0
     else:
-        cutoff = date.today() - timedelta(days=7)
+        anchor_date = df_pending_pos.select(
+            pl.col("Date_Created").cast(pl.Date, strict=False).max().alias("anchor_date")
+        )["anchor_date"].item()
+        if anchor_date is None:
+            anchor_date = date.today()
+        cutoff = anchor_date - timedelta(days=7)
         df_eff = df_pending_pos.with_columns(
-            pl.col("Date_Created").fill_null(pl.lit(date.today())).alias("_eff_date")
+            pl.col("Date_Created").cast(pl.Date, strict=False).fill_null(pl.lit(anchor_date)).alias("_eff_date")
         )
         total_draft_po_amount = float(
             df_eff.filter(pl.col("_eff_date") >= pl.lit(cutoff))["Order_Total_Amount"].sum()
