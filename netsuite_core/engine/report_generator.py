@@ -133,7 +133,7 @@ def print_cfo_report(
         row = df_dead.sort("Location_Capital_Deployed", descending=True).row(0, named=True)
         print("   1. [DEAD STOCK]")
         print(
-            f"      - {row['Item_Identifier']} | {preview_cell(row.get('Item_Description'), 25)} | ${row['Location_Capital_Deployed']:,.2f} Trapped"
+            f"      - {row['Item_Identifier']} | {preview_cell(row.get('Item_Description'), 25)} | ${row['Location_Capital_Deployed']:,.2f} Non-Performing"
         )
         print("        (Reason: zero trailing velocity with no active replacement demand)\n")
 
@@ -164,7 +164,7 @@ def print_cfo_report(
         qty_1 = item_rows[1, "Quantity_On_Hand"] if item_rows.height > 1 else 0
 
         print("   3. [WAREHOUSE TRANSFER ALERT]")
-        print(f"      - {top_item} | {preview_cell(title, 25)} | ${total_cap:,.2f} Stranded")
+        print(f"      - {top_item} | {preview_cell(title, 25)} | ${total_cap:,.2f} Potentially Misallocated")
         print(
             f"        (Reason: {qty_0} units in {preview_cell(loc_0, 15)}; {qty_1} units in {preview_cell(loc_1, 15)}; days-supply imbalance)\n"
         )

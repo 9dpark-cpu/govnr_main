@@ -899,52 +899,67 @@ def main_dashboard():
         if st.button("Run Manual Execution", type="primary", key="btn_run_health_scan"):
             from main import run_daily_governor
 
+            st.session_state.pop("manual_exec_metrics_saved", None)
+            st.session_state.pop("manual_exec_save_error", None)
+
             with st.spinner("Executing Govnr logic…"):
                 report_buffer = io.StringIO()
                 with redirect_stdout(report_buffer):
                     result = run_daily_governor(client_uuid=st.session_state["client_uuid"])
 
-            st.subheader("Govnr terminal output")
-            st.code(report_buffer.getvalue(), language="markdown")
+            st.session_state["manual_exec_stdout"] = report_buffer.getvalue()
 
-            if result is not None and result.get("metrics"):
-                m = result["metrics"]
+            if result is None:
+                st.session_state["manual_exec_success"] = False
+                st.session_state.pop("manual_exec_buffers", None)
+                st.session_state.pop("manual_exec_metrics", None)
+            else:
+                st.session_state["manual_exec_success"] = True
+                st.session_state["manual_exec_buffers"] = result["buffers"]
+                st.session_state["manual_exec_metrics"] = result.get("metrics")
+                metrics = result.get("metrics") or {}
+                if metrics:
+                    try:
+                        auth.save_cfo_metrics(
+                            st.session_state["client_uuid"],
+                            tier,
+                            float(metrics["total_capital_deployed"]),
+                            float(metrics["dead_stock_val"]),
+                            float(metrics["inventory_turnover"]),
+                            float(metrics["gross_margin_pct"]),
+                            "Tier A",
+                        )
+                        st.session_state["manual_exec_metrics_saved"] = True
+                    except Exception as e:
+                        st.session_state["manual_exec_save_error"] = str(e)
+
+        # Persisted UI: survives reruns triggered by download buttons or other widgets.
+        stdout_text = st.session_state.get("manual_exec_stdout")
+        if stdout_text is not None:
+            st.subheader("Govnr terminal output")
+            st.code(stdout_text, language="markdown")
+
+        if st.session_state.get("manual_exec_success") and st.session_state.get("manual_exec_buffers"):
+            buffers = st.session_state["manual_exec_buffers"]
+            metrics = st.session_state.get("manual_exec_metrics") or {}
+
+            if metrics:
                 st.subheader("Run summary (OTB)")
                 col_otb1, col_otb2 = st.columns(2)
                 col_otb1.metric(
                     "Weekly OTB limit (CFO)",
-                    f"${float(m.get('weekly_otb_limit', 0)):,.2f}",
+                    f"${float(metrics.get('weekly_otb_limit', 0)):,.2f}",
                 )
                 col_otb2.metric(
                     "Rolling 7-day PO exposure",
-                    f"${float(m.get('rolling_po_total', 0)):,.2f}",
+                    f"${float(metrics.get('rolling_po_total', 0)):,.2f}",
                     help="Same total as the compliance brief and CFO PDF (anchor = max PO Date_Created).",
                 )
 
-            if result is None:
-                st.error(
-                    "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
-                    "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
-                )
-                st.stop()
-
-            buffers = result["buffers"]
-            metrics = result.get("metrics")
-
-            if metrics:
-                try:
-                    auth.save_cfo_metrics(
-                        st.session_state["client_uuid"],
-                        tier,
-                        float(metrics["total_capital_deployed"]),
-                        float(metrics["dead_stock_val"]),
-                        float(metrics["inventory_turnover"]),
-                        float(metrics["gross_margin_pct"]),
-                        "Tier A",
-                    )
-                    st.success("Financial metrics securely logged to Govnr Vault.")
-                except Exception as e:
-                    st.error(f"Internal Metrics Logging Error: {e}")
+            if st.session_state.get("manual_exec_metrics_saved"):
+                st.success("Financial metrics securely logged to Govnr Vault.")
+            elif st.session_state.get("manual_exec_save_error"):
+                st.error(f"Internal Metrics Logging Error: {st.session_state['manual_exec_save_error']}")
 
             st.subheader("Generated Manual Execution deliverables")
 
@@ -956,19 +971,26 @@ def main_dashboard():
                     data=pdf_bytes,
                     file_name=pdf_key,
                     mime="application/pdf",
-                    key="download_cfo_strategic_brief_pdf",
+                    key="manual_exec_dl_govnr_executive_brief_pdf",
                 )
 
             for file_name, file_bytes in buffers.items():
                 if file_name == pdf_key:
                     continue
+                safe_key = "".join(c if c.isalnum() else "_" for c in file_name)
                 st.download_button(
                     label=f"Download {file_name}",
                     data=file_bytes,
                     file_name=file_name,
                     mime="text/csv",
-                    key=f"dl_csv_{file_name}",
+                    key=f"manual_exec_dl_csv_{safe_key}",
                 )
+
+        elif st.session_state.get("manual_exec_success") is False and stdout_text is not None:
+            st.error(
+                "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
+                "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
+            )
     elif app_mode == "ERP SFTP Connections":
         enterprise_ingestion_admin_page()
 

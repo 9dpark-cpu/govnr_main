@@ -147,7 +147,8 @@ def generate_cfo_pdf(
     if transfer_item_count > 0:
         elements.append(
             Paragraph(
-                f"<b>Flagged items:</b> {transfer_item_count} — one location under ~15 days supply while another exceeds ~180 days.",
+                f"<b>Flagged items:</b> {transfer_item_count} — at least one location with less than 15 days of supply "
+                f"and another with greater than 180 days of supply.",
                 alert_style,
             )
         )

@@ -175,7 +175,7 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
             )
         )
         .when(pl.col("Stock_Status") == "Dead Stock (>365d)")
-        .then(pl.lit(" CANCEL LINE: Toxic Stock Detected"))
+        .then(pl.lit("CANCEL LINE: Dead Stock (NPI)"))
         .when(
             (pl.col("Net_Qty").fill_null(0.0) + pl.col("Quantity_Ordered").fill_null(0.0) - pl.col("Net_Committed").fill_null(0.0))
             > pl.col("Global_Target_Stock_Level").fill_null(0.0)
