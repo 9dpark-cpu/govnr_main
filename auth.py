@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import bcrypt
 import psycopg2
@@ -271,15 +273,45 @@ def save_column_mapping(client_uuid: str, mapping_dict: dict):
         cursor.close()
         conn.close()
 
-def save_cfo_metrics(client_uuid: str, run_tier: str, total_cap: float, dead_val: float, turnover: float, margin: float, confidence_tier: str):
+def ensure_client_metrics_otb_columns() -> None:
+    """Migrate older DBs: rolling PO exposure and weekly OTB ceiling on client_metrics_history."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS rolling_po_exposure NUMERIC(15, 2);"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS weekly_otb_limit NUMERIC(15, 2);"
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def save_cfo_metrics(
+    client_uuid: str,
+    run_tier: str,
+    total_cap: float,
+    dead_val: float,
+    turnover: float,
+    margin: float,
+    confidence_tier: str,
+    *,
+    rolling_po_exposure: float | None = None,
+    weekly_otb_ceiling: float | None = None,
+):
+    ensure_client_metrics_otb_columns()
     conn = get_db_connection()
     cursor = conn.cursor()
     today = date.today()
     try:
         cursor.execute("""
             INSERT INTO client_metrics_history 
-            (client_uuid, date_recorded, run_tier, total_capital_deployed, dead_stock_val, inventory_turnover, gross_margin_pct, confidence_tier)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (client_uuid, date_recorded, run_tier, total_capital_deployed, dead_stock_val, inventory_turnover,
+             gross_margin_pct, confidence_tier, rolling_po_exposure, weekly_otb_limit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (client_uuid, date_recorded) 
             DO UPDATE SET 
                 run_tier = EXCLUDED.run_tier,
@@ -287,8 +319,21 @@ def save_cfo_metrics(client_uuid: str, run_tier: str, total_cap: float, dead_val
                 dead_stock_val = EXCLUDED.dead_stock_val,
                 inventory_turnover = EXCLUDED.inventory_turnover,
                 gross_margin_pct = EXCLUDED.gross_margin_pct,
-                confidence_tier = EXCLUDED.confidence_tier;
-        """, (client_uuid, today, run_tier, total_cap, dead_val, turnover, margin, confidence_tier))
+                confidence_tier = EXCLUDED.confidence_tier,
+                rolling_po_exposure = EXCLUDED.rolling_po_exposure,
+                weekly_otb_limit = EXCLUDED.weekly_otb_limit;
+        """, (
+            client_uuid,
+            today,
+            run_tier,
+            total_cap,
+            dead_val,
+            turnover,
+            margin,
+            confidence_tier,
+            rolling_po_exposure,
+            weekly_otb_ceiling,
+        ))
         conn.commit()
     except Exception as e:
         print(f"Failed to log metrics: {e}")

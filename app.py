@@ -833,16 +833,18 @@ def main_dashboard():
         st.title("Executive Financial Dashboard")
         st.write("Historical trends and key performance indicators based on your Govnr syncs.")
 
+        auth.ensure_client_metrics_otb_columns()
         conn = auth.get_db_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT date_recorded, total_capital_deployed, dead_stock_val, 
-                   inventory_turnover, gross_margin_pct, avg_gmroi 
-            FROM client_metrics_history 
-            WHERE client_uuid = %s 
+            SELECT date_recorded, total_capital_deployed, dead_stock_val,
+                   inventory_turnover, gross_margin_pct, avg_gmroi,
+                   rolling_po_exposure, weekly_otb_limit
+            FROM client_metrics_history
+            WHERE client_uuid = %s
             ORDER BY date_recorded ASC
         """, (st.session_state["client_uuid"],))
-        
+
         records = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -851,27 +853,84 @@ def main_dashboard():
             st.info("No historical data found. Please run Manual Execution to generate your first data point.")
         else:
             df_history = pd.DataFrame(records)
+            df_history = df_history.sort_values("date_recorded")
+            numeric_cols = (
+                "total_capital_deployed",
+                "dead_stock_val",
+                "inventory_turnover",
+                "gross_margin_pct",
+                "rolling_po_exposure",
+                "weekly_otb_limit",
+            )
+            for col in numeric_cols:
+                if col in df_history.columns:
+                    df_history[col] = pd.to_numeric(df_history[col], errors="coerce").astype("float64")
+            df_history["date_recorded"] = pd.to_datetime(df_history["date_recorded"])
             latest = df_history.iloc[-1]
-            st.subheader(f"Latest Snapshot: {latest['date_recorded']}")
-            
+            st.subheader(f"Latest Snapshot: {latest['date_recorded'].date()}")
+
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Total Capital Deployed", f"${float(latest['total_capital_deployed']):,.2f}")
             col2.metric("Dead Stock Value", f"${float(latest['dead_stock_val']):,.2f}")
             col3.metric("Inventory Turnover", f"{float(latest['inventory_turnover']):.2f}x")
             col4.metric("Gross Margin", f"{float(latest['gross_margin_pct']):.2f}%")
 
+            _draft_raw = pd.to_numeric(latest.get("rolling_po_exposure"), errors="coerce")
+            _weekly_raw = pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce")
+            draft_po = 0.0 if pd.isna(_draft_raw) else float(_draft_raw)
+            weekly_otb = 0.0 if pd.isna(_weekly_raw) else float(_weekly_raw)
+            over_otb = draft_po > weekly_otb
+            st.metric(
+                "Draft PO Exposure",
+                f"${draft_po:,.2f}",
+                delta=f"Weekly OTB limit ${weekly_otb:,.2f}",
+                delta_color="inverse" if over_otb else "normal",
+                help="7-day rolling draft purchase order total (same definition as the compliance brief).",
+            )
+            if over_otb:
+                st.warning(
+                    "Draft PO exposure exceeds the CFO weekly OTB limit — cash collision risk. "
+                    "Review open PO lines before releasing additional procurement."
+                )
+
             st.markdown("---")
+            df_chart = df_history.set_index("date_recorded")[list(numeric_cols[:4])].astype("float64")
             colA, colB = st.columns(2)
-            
+
             with colA:
                 st.subheader("Capital vs. Dead Stock")
-                chart_data_capital = df_history.set_index('date_recorded')[['total_capital_deployed', 'dead_stock_val']]
-                st.line_chart(chart_data_capital)
-                
+                st.line_chart(df_chart[["total_capital_deployed", "dead_stock_val"]])
+
             with colB:
                 st.subheader("Turnover Efficiency")
-                chart_data_turnover = df_history.set_index('date_recorded')[['inventory_turnover']]
-                st.line_chart(chart_data_turnover)
+                st.line_chart(df_chart[["inventory_turnover"]])
+
+            st.subheader("Gross Margin %")
+            st.line_chart(df_chart[["gross_margin_pct"]])
+
+            st.subheader("Actionable Warehouse Hit-Lists")
+            outbound_dir = os.path.join(BASE_DIR, "netsuite_core", "data", "outbound")
+            if os.path.isdir(outbound_dir):
+                csv_names = sorted(
+                    f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
+                )
+                if not csv_names:
+                    st.caption("No CSV hit-lists found in outbound yet. Run the engine to generate reports.")
+                else:
+                    for name in csv_names:
+                        path = os.path.join(outbound_dir, name)
+                        with open(path, "rb") as fh:
+                            blob = fh.read()
+                        safe_key = "".join(c if c.isalnum() else "_" for c in name)
+                        st.download_button(
+                            label=f"Download {name}",
+                            data=blob,
+                            file_name=name,
+                            mime="text/csv",
+                            key=f"exec_hitlist_{safe_key}",
+                        )
+            else:
+                st.caption("Outbound report directory is not present yet.")
 
     elif app_mode == "Data Mapping & Rules":
         erp_integration_settings_page()
@@ -928,6 +987,10 @@ def main_dashboard():
                             float(metrics["inventory_turnover"]),
                             float(metrics["gross_margin_pct"]),
                             "Tier A",
+                            rolling_po_exposure=float(
+                                metrics.get("rolling_po_exposure", metrics.get("rolling_po_total", 0.0)) or 0.0
+                            ),
+                            weekly_otb_ceiling=float(metrics.get("weekly_otb_limit", 0.0) or 0.0),
                         )
                         st.session_state["manual_exec_metrics_saved"] = True
                     except Exception as e:
