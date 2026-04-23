@@ -29,22 +29,26 @@ from engine.logic_governor import audit_purchase_orders, enrich_inventory_health
 from engine.netsuite_parser import ingest_annual_sold, ingest_inventory_snapshot, ingest_po_activity
 
 
-def _dead_stock_value_from_audit_buffers(buffers: dict) -> float:
-    """
-    Dead stock $ exactly as terminal/PDF: same ``df_dead`` the engine serialized to
-    ``Report_1_Dead_stock.csv`` (sum of ``Location_Capital_Deployed``).
-    """
+def _dead_stock_alert_dataframe_from_buffers(buffers: dict) -> pl.DataFrame:
+    """Same rows written to ``Report_1_Dead_stock.csv`` inside ``calculate_financial_health`` (engine ``df_dead``)."""
     key = "Report_1_Dead_stock.csv"
     raw = buffers.get(key)
     if not raw:
-        return 0.0
+        return pl.DataFrame()
     try:
-        df = pl.read_csv(io.BytesIO(raw))
-        if df.is_empty() or "Location_Capital_Deployed" not in df.columns:
-            return 0.0
-        return float(df["Location_Capital_Deployed"].sum() or 0.0)
+        return pl.read_csv(io.BytesIO(raw))
     except Exception:
+        return pl.DataFrame()
+
+
+def _true_dead_stock_capital_sum(df_alert_dead_stock: pl.DataFrame) -> float:
+    """Hard sum from the alert frame only — cast to float64 before summing (CSV can be string-typed)."""
+    if df_alert_dead_stock.is_empty() or "Location_Capital_Deployed" not in df_alert_dead_stock.columns:
         return 0.0
+    agg = df_alert_dead_stock.select(
+        pl.col("Location_Capital_Deployed").cast(pl.Float64, strict=False).fill_null(0.0).sum()
+    )
+    return float(agg.row(0)[0])
 
 
 _STRING_COLS_FOR_ENGINE = (
@@ -215,13 +219,14 @@ def run_daily_governor(
     financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(wlim))
 
     ops = _operating_kpis_from_inventory_same_as_engine(df_inv_raw)
-    dead_engine = _dead_stock_value_from_audit_buffers(generated_buffers)
+    df_alert_dead_stock = _dead_stock_alert_dataframe_from_buffers(generated_buffers)
+    true_dead_stock_sum = _true_dead_stock_capital_sum(df_alert_dead_stock)
     draft_roll = float(financials["Total_Draft_PO_Amount"])
     weekly_lim = float(financials["Weekly_OTB_Limit"])
     metrics = {
         **ops,
-        "dead_stock_val": dead_engine,
-        "dead_stock_value": dead_engine,
+        "dead_stock_val": true_dead_stock_sum,
+        "dead_stock_value": true_dead_stock_sum,
         "rolling_po_exposure": draft_roll,
         "rolling_po_total": draft_roll,
         "weekly_otb_limit": weekly_lim,
@@ -236,7 +241,7 @@ def run_daily_governor(
             float(metrics["inventory_turnover"]),
             float(metrics["gross_margin_pct"]),
             "Tier A",
-            dead_stock_value=float(metrics["dead_stock_value"]),
+            dead_stock_value=float(true_dead_stock_sum),
             rolling_po_exposure=float(metrics["rolling_po_total"]),
             weekly_otb_ceiling=float(metrics["weekly_otb_limit"]),
         )
