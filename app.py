@@ -834,11 +834,31 @@ def main_dashboard():
         st.write("Historical trends and key performance indicators based on your Govnr syncs.")
 
         records = auth.get_client_metrics_history(st.session_state["client_uuid"])
+        df_history = pd.DataFrame(records) if records else pd.DataFrame()
+
+        with st.expander("🛠️ DevOps Telemetry (DigitalOcean App Platform)", expanded=True):
+            st.markdown("**1. Database State Feed:**")
+            try:
+                st.dataframe(df_history.head(3))
+                latest_row = df_history.iloc[0]
+                st.write(f"**Latest DB Timestamp:** {latest_row.get('date_recorded', 'N/A')}")
+                st.write(f"**Latest DB Dead Stock:** {latest_row.get('dead_stock_val', 'N/A')}")
+                st.write(f"**Latest DB OTB limit:** {latest_row.get('weekly_otb_limit', 'N/A')}")
+                st.write(f"**Latest DB Draft PO:** {latest_row.get('rolling_po_exposure', 'N/A')}")
+            except Exception as e:
+                st.error(f"Failed to fetch or parse DB history: {e}")
+
+            st.markdown("**2. File System Pathing:**")
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
+            st.write(f"**Resolved Absolute Path:** `{outbound_dir}`")
+            st.write(f"**Path Exists?** `{os.path.exists(outbound_dir)}`")
+            if os.path.exists(outbound_dir):
+                st.write(f"**Directory Contents:** `{os.listdir(outbound_dir)}`")
 
         if not records:
             st.info("No historical data found. Please run Manual Execution to generate your first data point.")
         else:
-            df_history = pd.DataFrame(records)
             numeric_cols = (
                 "total_capital_deployed",
                 "dead_stock_val",
@@ -858,9 +878,6 @@ def main_dashboard():
                 0.0
                 if pd.isna(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
                 else float(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
-            )
-            print(
-                f"DEBUG DASHBOARD: Fetched Latest Row -> Dead Stock: {dead_stock_val}, OTB: {weekly_otb_limit}"
             )
             df_chart_source = df_history.sort_values("date_recorded")
             st.subheader(f"Latest Snapshot: {latest['date_recorded'].date()}")
@@ -907,12 +924,6 @@ def main_dashboard():
             st.subheader("Actionable Warehouse Hit-Lists")
             base_path = os.path.dirname(os.path.abspath(__file__))
             outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
-            print(f"DEBUG PATH: Resolving outbound dir at -> {outbound_dir}")
-            print(f"DEBUG PATH: Directory exists? -> {os.path.exists(outbound_dir)}")
-            if not os.path.isdir(outbound_dir):
-                outbound_dir = os.path.join(NETSUITE_DIR, "data", "outbound")
-                print(f"DEBUG PATH: Fallback outbound dir -> {outbound_dir}")
-                print(f"DEBUG PATH: Fallback exists? -> {os.path.isdir(outbound_dir)}")
             if os.path.isdir(outbound_dir):
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
