@@ -113,7 +113,6 @@ def harvest_proprietary_metrics(
                     inventory_turnover = EXCLUDED.inventory_turnover,
                     gross_margin_pct = EXCLUDED.gross_margin_pct,
                     avg_gmroi = EXCLUDED.avg_gmroi,
-                    dead_stock_val = EXCLUDED.dead_stock_val,
                     obsolete_stock_val = EXCLUDED.obsolete_stock_val,
                     cash_balance = EXCLUDED.cash_balance;
             """
