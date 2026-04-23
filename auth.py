@@ -294,13 +294,13 @@ def save_cfo_metrics(
     client_uuid: str,
     run_tier: str,
     total_cap: float,
-    dead_val: float,
     turnover: float,
     margin: float,
     confidence_tier: str,
     *,
-    rolling_po_exposure: float | None = None,
-    weekly_otb_ceiling: float | None = None,
+    dead_stock_value: float,
+    rolling_po_exposure: float,
+    weekly_otb_ceiling: float,
 ):
     ensure_client_metrics_otb_columns()
     conn = get_db_connection()
@@ -327,7 +327,7 @@ def save_cfo_metrics(
             today,
             run_tier,
             total_cap,
-            dead_val,
+            dead_stock_value,
             turnover,
             margin,
             confidence_tier,

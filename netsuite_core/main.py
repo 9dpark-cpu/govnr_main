@@ -6,8 +6,12 @@ import polars as pl
 
 # --- DEFENSIVE PATHING ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+REPO_ROOT = os.path.dirname(BASE_DIR)
+for _p in (BASE_DIR, REPO_ROOT):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import auth
 
 from engine.erp_config_loader import fetch_ingestion_config, resolve_weekly_otb_limit
 from engine.financial_math import calculate_financial_health
@@ -119,7 +123,11 @@ def _strict_location_first_db_snapshot(df_inv: pl.DataFrame) -> dict[str, float]
     }
 
 
-def run_daily_governor(client_uuid: str, weekly_otb_limit: float | None = None):
+def run_daily_governor(
+    client_uuid: str,
+    weekly_otb_limit: float | None = None,
+    run_tier: str | None = None,
+):
     print(f"[{client_uuid}] Initializing Govnr Pipeline...\n")
 
     cfg = fetch_ingestion_config(client_uuid)
@@ -219,13 +227,39 @@ def run_daily_governor(client_uuid: str, weekly_otb_limit: float | None = None):
 
     engine_db_snapshot = _strict_location_first_db_snapshot(df_inv_raw)
     draft_roll = float(financials["Total_Draft_PO_Amount"])
+    weekly_lim = float(financials["Weekly_OTB_Limit"])
+    dead_stock_strict = float(engine_db_snapshot["dead_stock_val"])
     metrics = {
         **engine_db_snapshot,
+        "dead_stock_value": dead_stock_strict,
         "rolling_po_exposure": draft_roll,
         "rolling_po_total": draft_roll,
-        "weekly_otb_limit": float(financials["Weekly_OTB_Limit"]),
+        "weekly_otb_limit": weekly_lim,
     }
-    return {"buffers": generated_buffers, "metrics": metrics}
+
+    tier = run_tier if run_tier is not None else "diagnostic"
+    metrics_save_error: str | None = None
+    try:
+        auth.save_cfo_metrics(
+            client_uuid,
+            tier,
+            float(metrics["total_capital_deployed"]),
+            float(metrics["inventory_turnover"]),
+            float(metrics["gross_margin_pct"]),
+            "Tier A",
+            dead_stock_value=float(metrics["dead_stock_value"]),
+            rolling_po_exposure=float(metrics["rolling_po_total"]),
+            weekly_otb_ceiling=float(metrics["weekly_otb_limit"]),
+        )
+    except Exception as e:
+        metrics_save_error = str(e)
+        print(f"[Govnr] Failed to persist CFO metrics to vault: {e}")
+
+    return {
+        "buffers": generated_buffers,
+        "metrics": metrics,
+        "metrics_save_error": metrics_save_error,
+    }
 
 
 if __name__ == "__main__":

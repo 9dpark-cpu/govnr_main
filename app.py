@@ -909,7 +909,9 @@ def main_dashboard():
             st.line_chart(df_chart[["gross_margin_pct"]])
 
             st.subheader("Actionable Warehouse Hit-Lists")
-            outbound_dir = os.path.join(BASE_DIR, "netsuite_core", "data", "outbound")
+            outbound_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "netsuite_core", "data", "outbound")
+            )
             if os.path.isdir(outbound_dir):
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
@@ -964,7 +966,10 @@ def main_dashboard():
             with st.spinner("Executing Govnr logic…"):
                 report_buffer = io.StringIO()
                 with redirect_stdout(report_buffer):
-                    result = run_daily_governor(client_uuid=st.session_state["client_uuid"])
+                    result = run_daily_governor(
+                        client_uuid=st.session_state["client_uuid"],
+                        run_tier=tier,
+                    )
 
             st.session_state["manual_exec_stdout"] = report_buffer.getvalue()
 
@@ -976,25 +981,13 @@ def main_dashboard():
                 st.session_state["manual_exec_success"] = True
                 st.session_state["manual_exec_buffers"] = result["buffers"]
                 st.session_state["manual_exec_metrics"] = result.get("metrics")
-                metrics = result.get("metrics") or {}
-                if metrics:
-                    try:
-                        auth.save_cfo_metrics(
-                            st.session_state["client_uuid"],
-                            tier,
-                            float(metrics["total_capital_deployed"]),
-                            float(metrics["dead_stock_val"]),
-                            float(metrics["inventory_turnover"]),
-                            float(metrics["gross_margin_pct"]),
-                            "Tier A",
-                            rolling_po_exposure=float(
-                                metrics.get("rolling_po_exposure", metrics.get("rolling_po_total", 0.0)) or 0.0
-                            ),
-                            weekly_otb_ceiling=float(metrics.get("weekly_otb_limit", 0.0) or 0.0),
-                        )
-                        st.session_state["manual_exec_metrics_saved"] = True
-                    except Exception as e:
-                        st.session_state["manual_exec_save_error"] = str(e)
+                err = result.get("metrics_save_error")
+                if err:
+                    st.session_state["manual_exec_save_error"] = err
+                    st.session_state["manual_exec_metrics_saved"] = False
+                else:
+                    st.session_state.pop("manual_exec_save_error", None)
+                    st.session_state["manual_exec_metrics_saved"] = True
 
         # Persisted UI: survives reruns triggered by download buttons or other widgets.
         stdout_text = st.session_state.get("manual_exec_stdout")
