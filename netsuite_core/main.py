@@ -28,6 +28,20 @@ from engine.logic_governor import audit_purchase_orders, enrich_inventory_health
 from engine.netsuite_parser import ingest_annual_sold, ingest_inventory_snapshot, ingest_po_activity
 
 
+def _persist_audit_csvs_to_outbound(buffers: dict) -> None:
+    """Ensure outbound exists on ephemeral hosts (e.g. DO App Platform) and write CSV hit-lists to disk."""
+    outbound_dir = os.path.join(REPO_ROOT, "netsuite_core", "data", "outbound")
+    os.makedirs(outbound_dir, exist_ok=True)
+    for fname, payload in buffers.items():
+        if not isinstance(fname, str) or not fname.lower().endswith(".csv"):
+            continue
+        if not isinstance(payload, (bytes, bytearray)):
+            continue
+        out_path = os.path.join(outbound_dir, fname)
+        with open(out_path, "wb") as fp:
+            fp.write(payload)
+
+
 _STRING_COLS_FOR_SNAPSHOT = (
     "Item_Identifier",
     "Item_Location",
@@ -160,6 +174,7 @@ def run_daily_governor(
         df_po_raw,
         weekly_otb_limit=float(wlim),
     )
+    _persist_audit_csvs_to_outbound(generated_buffers)
 
     df_inv_health = enrich_inventory_health(df_inv_raw)
     df_po_alerts = audit_purchase_orders(df_inv_health, df_po_raw)
@@ -169,6 +184,35 @@ def run_daily_governor(
     tax_writeoff = generate_tax_mitigation_plan(df_inv_health)
 
     financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(wlim))
+
+    engine_db_snapshot = _strict_location_first_db_snapshot(df_inv_raw)
+    draft_roll = float(financials["Total_Draft_PO_Amount"])
+    weekly_lim = float(financials["Weekly_OTB_Limit"])
+    dead_stock_strict = float(engine_db_snapshot["dead_stock_val"])
+    metrics = {
+        **engine_db_snapshot,
+        "dead_stock_value": dead_stock_strict,
+        "rolling_po_exposure": draft_roll,
+        "rolling_po_total": draft_roll,
+        "weekly_otb_limit": weekly_lim,
+    }
+    tier = run_tier if run_tier is not None else "diagnostic"
+    metrics_save_error: str | None = None
+    try:
+        auth.save_cfo_metrics(
+            client_uuid,
+            tier,
+            float(metrics["total_capital_deployed"]),
+            float(metrics["inventory_turnover"]),
+            float(metrics["gross_margin_pct"]),
+            "Tier A",
+            dead_stock_value=float(metrics["dead_stock_value"]),
+            rolling_po_exposure=float(metrics["rolling_po_total"]),
+            weekly_otb_ceiling=float(metrics["weekly_otb_limit"]),
+        )
+    except Exception as e:
+        metrics_save_error = str(e)
+        print(f"[Govnr] Failed to persist CFO metrics to vault: {e}")
 
     print("\n" + "=" * 75)
     print("  GOVNR: DAILY STRATEGIC COMPLIANCE BRIEF")
@@ -224,36 +268,6 @@ def run_daily_governor(
         )
 
     print("=" * 75 + "\n")
-
-    engine_db_snapshot = _strict_location_first_db_snapshot(df_inv_raw)
-    draft_roll = float(financials["Total_Draft_PO_Amount"])
-    weekly_lim = float(financials["Weekly_OTB_Limit"])
-    dead_stock_strict = float(engine_db_snapshot["dead_stock_val"])
-    metrics = {
-        **engine_db_snapshot,
-        "dead_stock_value": dead_stock_strict,
-        "rolling_po_exposure": draft_roll,
-        "rolling_po_total": draft_roll,
-        "weekly_otb_limit": weekly_lim,
-    }
-
-    tier = run_tier if run_tier is not None else "diagnostic"
-    metrics_save_error: str | None = None
-    try:
-        auth.save_cfo_metrics(
-            client_uuid,
-            tier,
-            float(metrics["total_capital_deployed"]),
-            float(metrics["inventory_turnover"]),
-            float(metrics["gross_margin_pct"]),
-            "Tier A",
-            dead_stock_value=float(metrics["dead_stock_value"]),
-            rolling_po_exposure=float(metrics["rolling_po_total"]),
-            weekly_otb_ceiling=float(metrics["weekly_otb_limit"]),
-        )
-    except Exception as e:
-        metrics_save_error = str(e)
-        print(f"[Govnr] Failed to persist CFO metrics to vault: {e}")
 
     return {
         "buffers": generated_buffers,

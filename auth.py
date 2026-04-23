@@ -338,14 +338,14 @@ def save_cfo_metrics(
             (client_uuid, date_recorded, run_tier, total_capital_deployed, dead_stock_val, inventory_turnover,
              gross_margin_pct, confidence_tier, rolling_po_exposure, weekly_otb_limit)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (client_uuid, date_recorded) 
-            DO UPDATE SET 
+            ON CONFLICT (client_uuid, date_recorded)
+            DO UPDATE SET
                 run_tier = EXCLUDED.run_tier,
                 total_capital_deployed = EXCLUDED.total_capital_deployed,
-                dead_stock_val = EXCLUDED.dead_stock_val,
                 inventory_turnover = EXCLUDED.inventory_turnover,
                 gross_margin_pct = EXCLUDED.gross_margin_pct,
                 confidence_tier = EXCLUDED.confidence_tier,
+                dead_stock_val = EXCLUDED.dead_stock_val,
                 rolling_po_exposure = EXCLUDED.rolling_po_exposure,
                 weekly_otb_limit = EXCLUDED.weekly_otb_limit;
         """, (

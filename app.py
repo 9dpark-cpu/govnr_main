@@ -851,6 +851,7 @@ def main_dashboard():
             st.markdown("**2. File System Pathing:**")
             base_path = os.path.dirname(os.path.abspath(__file__))
             outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
+            os.makedirs(outbound_dir, exist_ok=True)
             st.write(f"**Resolved Absolute Path:** `{outbound_dir}`")
             st.write(f"**Path Exists?** `{os.path.exists(outbound_dir)}`")
             if os.path.exists(outbound_dir):
@@ -924,6 +925,7 @@ def main_dashboard():
             st.subheader("Actionable Warehouse Hit-Lists")
             base_path = os.path.dirname(os.path.abspath(__file__))
             outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
+            os.makedirs(outbound_dir, exist_ok=True)
             if os.path.isdir(outbound_dir):
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
