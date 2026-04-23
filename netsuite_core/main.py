@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 from datetime import date
@@ -28,21 +29,25 @@ from engine.logic_governor import audit_purchase_orders, enrich_inventory_health
 from engine.netsuite_parser import ingest_annual_sold, ingest_inventory_snapshot, ingest_po_activity
 
 
-def _persist_audit_csvs_to_outbound(buffers: dict) -> None:
-    """Ensure outbound exists on ephemeral hosts (e.g. DO App Platform) and write CSV hit-lists to disk."""
-    outbound_dir = os.path.join(REPO_ROOT, "netsuite_core", "data", "outbound")
-    os.makedirs(outbound_dir, exist_ok=True)
-    for fname, payload in buffers.items():
-        if not isinstance(fname, str) or not fname.lower().endswith(".csv"):
-            continue
-        if not isinstance(payload, (bytes, bytearray)):
-            continue
-        out_path = os.path.join(outbound_dir, fname)
-        with open(out_path, "wb") as fp:
-            fp.write(payload)
+def _dead_stock_value_from_audit_buffers(buffers: dict) -> float:
+    """
+    Dead stock $ exactly as terminal/PDF: same ``df_dead`` the engine serialized to
+    ``Report_1_Dead_stock.csv`` (sum of ``Location_Capital_Deployed``).
+    """
+    key = "Report_1_Dead_stock.csv"
+    raw = buffers.get(key)
+    if not raw:
+        return 0.0
+    try:
+        df = pl.read_csv(io.BytesIO(raw))
+        if df.is_empty() or "Location_Capital_Deployed" not in df.columns:
+            return 0.0
+        return float(df["Location_Capital_Deployed"].sum() or 0.0)
+    except Exception:
+        return 0.0
 
 
-_STRING_COLS_FOR_SNAPSHOT = (
+_STRING_COLS_FOR_ENGINE = (
     "Item_Identifier",
     "Item_Location",
     "Item_Description",
@@ -55,22 +60,21 @@ _STRING_COLS_FOR_SNAPSHOT = (
 )
 
 
-def _strict_location_first_db_snapshot(df_inv: pl.DataFrame) -> dict[str, float]:
+def _operating_kpis_from_inventory_same_as_engine(df_inv: pl.DataFrame) -> dict[str, float]:
     """
-    Location-first KPIs for DB persistence, aligned with the certified engine's
-    ``calculate_financial_health`` terminal/PDF path (same df_master / non_performing definition;
-    ``financial_math.py`` is not modified—logic is mirrored here in lockstep).
+    Capital, turnover, and margin on the same ``df_master`` path as
+    ``engine.financial_math.calculate_financial_health`` (through operating ratios).
+    Dead stock is NOT computed here — it comes only from audit buffers.
     """
     if df_inv.is_empty():
         return {
             "total_capital_deployed": 0.0,
-            "dead_stock_val": 0.0,
             "inventory_turnover": 0.0,
             "gross_margin_pct": 0.0,
         }
 
     current_date = date.today()
-    df_master = coerce_scalar_string_columns(df_inv, _STRING_COLS_FOR_SNAPSHOT).with_columns([
+    df_master = coerce_scalar_string_columns(df_inv, _STRING_COLS_FOR_ENGINE).with_columns([
         pl.max_horizontal(pl.col("Quantity_Available").fill_null(0) + pl.col("Quantity_Committed").fill_null(0), 0.0).alias(
             "Quantity_On_Hand"
         ),
@@ -101,24 +105,36 @@ def _strict_location_first_db_snapshot(df_inv: pl.DataFrame) -> dict[str, float]
     )
     df_master = df_master.with_columns(pl.col("Replacement_Annual_Sold").fill_null(0.0))
 
-    non_performing = (
-        (pl.col("Annual_Sold").fill_null(0.0) == 0)
-        & (pl.col("Days_Since_Last_Sale") > 365)
-        & (
-            (pl.col("Replacement_Item_Identifier") == "")
-            | (pl.col("Replacement_Annual_Sold") == 0)
-        )
-        & (pl.col("Quantity_On_Hand") > 0)
+    df_item_cost = df_master.group_by("Item_Identifier").agg(
+        [
+            pl.col("Unit_Average_Cost").max().alias("Max_Unit_Cost"),
+            pl.col("Unit_Average_Cost").min().alias("Min_Unit_Cost"),
+        ]
     )
+    df_item_cost = df_item_cost.with_columns(
+        pl.when((pl.col("Min_Unit_Cost") > 0) & (pl.col("Max_Unit_Cost") > 0))
+        .then((pl.col("Max_Unit_Cost") - pl.col("Min_Unit_Cost")) / pl.col("Min_Unit_Cost"))
+        .otherwise(0.0)
+        .alias("Interbranch_Cost_Variance_Ratio")
+    )
+    df_master = df_master.join(df_item_cost, on="Item_Identifier", how="left")
+
+    loc_min = df_master.group_by("Item_Identifier").agg(pl.col("Location_Days_Supply").min().alias("_min_days"))
+    loc_max = df_master.group_by("Item_Identifier").agg(pl.col("Location_Days_Supply").max().alias("_max_days"))
+    df_loc_bounds = loc_min.join(loc_max, on="Item_Identifier", how="inner").with_columns(
+        ((pl.col("_min_days") < 15) & (pl.col("_max_days") > 180)).alias("Inter_Branch_Misallocation")
+    )
+    df_master = df_master.join(
+        df_loc_bounds.select(["Item_Identifier", "Inter_Branch_Misallocation"]),
+        on="Item_Identifier",
+        how="left",
+    ).with_columns(pl.col("Inter_Branch_Misallocation").fill_null(False))
 
     total_capital_deployed = float(df_master["Location_Capital_Deployed"].sum() or 0.0)
     sum_location_cogs = float(df_master["Location_Annual_COGS"].sum() or 0.0)
     estimated_turnover_ratio = (
         (sum_location_cogs / total_capital_deployed) if total_capital_deployed > 0 else 0.0
     )
-
-    df_dead = df_master.filter(non_performing)
-    dead_val = float(df_dead["Location_Capital_Deployed"].sum() or 0.0)
 
     sum_location_revenue = float(
         (df_master["Annual_Sold"].fill_null(0.0) * df_master["Unit_Base_Price"].fill_null(0.0)).sum() or 0.0
@@ -131,10 +147,23 @@ def _strict_location_first_db_snapshot(df_inv: pl.DataFrame) -> dict[str, float]
 
     return {
         "total_capital_deployed": float(total_capital_deployed),
-        "dead_stock_val": float(dead_val),
         "inventory_turnover": float(estimated_turnover_ratio),
         "gross_margin_pct": float(gross_margin_pct),
     }
+
+
+def _persist_audit_csvs_to_outbound(buffers: dict) -> None:
+    """Ensure outbound exists on ephemeral hosts (e.g. DO App Platform) and write CSV hit-lists to disk."""
+    outbound_dir = os.path.join(REPO_ROOT, "netsuite_core", "data", "outbound")
+    os.makedirs(outbound_dir, exist_ok=True)
+    for fname, payload in buffers.items():
+        if not isinstance(fname, str) or not fname.lower().endswith(".csv"):
+            continue
+        if not isinstance(payload, (bytes, bytearray)):
+            continue
+        out_path = os.path.join(outbound_dir, fname)
+        with open(out_path, "wb") as fp:
+            fp.write(payload)
 
 
 def run_daily_governor(
@@ -185,13 +214,14 @@ def run_daily_governor(
 
     financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(wlim))
 
-    engine_db_snapshot = _strict_location_first_db_snapshot(df_inv_raw)
+    ops = _operating_kpis_from_inventory_same_as_engine(df_inv_raw)
+    dead_engine = _dead_stock_value_from_audit_buffers(generated_buffers)
     draft_roll = float(financials["Total_Draft_PO_Amount"])
     weekly_lim = float(financials["Weekly_OTB_Limit"])
-    dead_stock_strict = float(engine_db_snapshot["dead_stock_val"])
     metrics = {
-        **engine_db_snapshot,
-        "dead_stock_value": dead_stock_strict,
+        **ops,
+        "dead_stock_val": dead_engine,
+        "dead_stock_value": dead_engine,
         "rolling_po_exposure": draft_roll,
         "rolling_po_total": draft_roll,
         "weekly_otb_limit": weekly_lim,
