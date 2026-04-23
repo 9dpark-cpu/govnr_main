@@ -273,6 +273,32 @@ def save_column_mapping(client_uuid: str, mapping_dict: dict):
         cursor.close()
         conn.close()
 
+def get_client_metrics_history(client_uuid: str) -> list:
+    """
+    Fetch CFO dashboard history for a client. Newest snapshot always first.
+    Intentionally uncached — dashboards must reflect the latest DB state immediately.
+    """
+    ensure_client_metrics_otb_columns()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT date_recorded, total_capital_deployed, dead_stock_val,
+                   inventory_turnover, gross_margin_pct, avg_gmroi,
+                   rolling_po_exposure, weekly_otb_limit
+            FROM client_metrics_history
+            WHERE client_uuid = %s
+            ORDER BY date_recorded DESC NULLS LAST
+            """,
+            (client_uuid,),
+        )
+        return list(cursor.fetchall())
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def ensure_client_metrics_otb_columns() -> None:
     """Migrate older DBs: rolling PO exposure and weekly OTB ceiling on client_metrics_history."""
     conn = get_db_connection()

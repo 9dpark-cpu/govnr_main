@@ -833,27 +833,12 @@ def main_dashboard():
         st.title("Executive Financial Dashboard")
         st.write("Historical trends and key performance indicators based on your Govnr syncs.")
 
-        auth.ensure_client_metrics_otb_columns()
-        conn = auth.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT date_recorded, total_capital_deployed, dead_stock_val,
-                   inventory_turnover, gross_margin_pct, avg_gmroi,
-                   rolling_po_exposure, weekly_otb_limit
-            FROM client_metrics_history
-            WHERE client_uuid = %s
-            ORDER BY date_recorded ASC
-        """, (st.session_state["client_uuid"],))
-
-        records = cursor.fetchall()
-        cursor.close()
-        conn.close()
+        records = auth.get_client_metrics_history(st.session_state["client_uuid"])
 
         if not records:
             st.info("No historical data found. Please run Manual Execution to generate your first data point.")
         else:
             df_history = pd.DataFrame(records)
-            df_history = df_history.sort_values("date_recorded")
             numeric_cols = (
                 "total_capital_deployed",
                 "dead_stock_val",
@@ -866,7 +851,18 @@ def main_dashboard():
                 if col in df_history.columns:
                     df_history[col] = pd.to_numeric(df_history[col], errors="coerce").astype("float64")
             df_history["date_recorded"] = pd.to_datetime(df_history["date_recorded"])
-            latest = df_history.iloc[-1]
+            # Query returns newest-first; metric cards use row 0. Charts need chronological order.
+            latest = df_history.iloc[0]
+            dead_stock_val = float(latest["dead_stock_val"])
+            weekly_otb_limit = (
+                0.0
+                if pd.isna(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
+                else float(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
+            )
+            print(
+                f"DEBUG DASHBOARD: Fetched Latest Row -> Dead Stock: {dead_stock_val}, OTB: {weekly_otb_limit}"
+            )
+            df_chart_source = df_history.sort_values("date_recorded")
             st.subheader(f"Latest Snapshot: {latest['date_recorded'].date()}")
 
             col1, col2, col3, col4 = st.columns(4)
@@ -894,7 +890,7 @@ def main_dashboard():
                 )
 
             st.markdown("---")
-            df_chart = df_history.set_index("date_recorded")[list(numeric_cols[:4])].astype("float64")
+            df_chart = df_chart_source.set_index("date_recorded")[list(numeric_cols[:4])].astype("float64")
             colA, colB = st.columns(2)
 
             with colA:
@@ -909,9 +905,14 @@ def main_dashboard():
             st.line_chart(df_chart[["gross_margin_pct"]])
 
             st.subheader("Actionable Warehouse Hit-Lists")
-            outbound_dir = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "netsuite_core", "data", "outbound")
-            )
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
+            print(f"DEBUG PATH: Resolving outbound dir at -> {outbound_dir}")
+            print(f"DEBUG PATH: Directory exists? -> {os.path.exists(outbound_dir)}")
+            if not os.path.isdir(outbound_dir):
+                outbound_dir = os.path.join(NETSUITE_DIR, "data", "outbound")
+                print(f"DEBUG PATH: Fallback outbound dir -> {outbound_dir}")
+                print(f"DEBUG PATH: Fallback exists? -> {os.path.isdir(outbound_dir)}")
             if os.path.isdir(outbound_dir):
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
