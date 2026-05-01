@@ -10,12 +10,15 @@ Inbound layout:
 from __future__ import annotations
 
 import hashlib
+import io
 import os
+import stat
 import shutil
 import sys
 import traceback
 from datetime import datetime, timezone
 
+import paramiko
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -99,6 +102,14 @@ def fetch_enabled_cron_clients():
                 cfg.inventory_filename_pattern,
                 cfg.annual_sold_filename_pattern,
                 cfg.po_filename_pattern,
+                cfg.sftp_host,
+                cfg.sftp_port,
+                cfg.sftp_username,
+                cfg.sftp_password,
+                cfg.sftp_password_env_var,
+                cfg.sftp_private_key_env_var,
+                cfg.sftp_inbound_path,
+                cfg.max_file_size_mb,
                 c.contact_email
             FROM client_ingestion_config cfg
             JOIN clients c ON c.client_uuid = cfg.client_uuid
@@ -111,82 +122,108 @@ def fetch_enabled_cron_clients():
         conn.close()
 
 
-def _newest_matching_csv(directory: str, pattern: str) -> tuple[str, str] | None:
-    """Return (full_path, basename) for newest .csv in directory whose name contains pattern (case-insensitive)."""
-    if not os.path.isdir(directory):
+def _load_private_key_from_env(env_var_name: str):
+    key_data = os.getenv(env_var_name or "", "").strip()
+    if not key_data:
         return None
-    candidates: list[tuple[float, str, str]] = []
-    for name in os.listdir(directory):
-        path = os.path.join(directory, name)
-        if not os.path.isfile(path) or not name.lower().endswith(".csv"):
-            continue
-        if pattern.lower() not in name.lower():
-            continue
+    key_data = key_data.replace("\\n", "\n")
+    for key_cls in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
         try:
-            mtime = os.path.getmtime(path)
-        except OSError:
+            return key_cls.from_private_key(io.StringIO(key_data))
+        except Exception:
             continue
-        candidates.append((mtime, path, name))
+    raise ValueError(f"Invalid private key in environment variable '{env_var_name}'.")
+
+
+def _sftp_newest_csv_name(sftp, inbound_path: str, pattern: str):
+    """Return filename of newest .csv in inbound_path whose name contains pattern (case-insensitive)."""
+    candidates = []
+    for entry in sftp.listdir_attr(inbound_path):
+        if not stat.S_ISREG(entry.st_mode):
+            continue
+        name_lower = entry.filename.lower()
+        if pattern.lower() in name_lower and name_lower.endswith(".csv"):
+            candidates.append((entry.st_mtime, entry.filename))
     if not candidates:
         return None
     candidates.sort(key=lambda x: x[0], reverse=True)
-    _, path, name = candidates[0]
-    return path, name
+    return candidates[0][1]
 
 
-def _copy_to_canonical(src_path: str, dest_name: str) -> None:
-    dest = os.path.join(INBOUND_ROOT, dest_name)
-    os.makedirs(INBOUND_ROOT, exist_ok=True)
-    shutil.copy2(src_path, dest)
-
-
-def stage_inbound_for_client(
+def _download_client_inbound_files(
     client_uuid: str,
+    sftp_host: str,
+    sftp_port: int,
+    sftp_username: str,
+    sftp_password: str | None,
+    sftp_password_env_var: str | None,
+    sftp_private_key_env_var: str | None,
+    sftp_inbound_path: str,
     inventory_pattern: str,
-    annual_pattern: str,
+    annual_sold_pattern: str,
     po_pattern: str,
-    single_enabled_client: bool,
+    max_file_size_mb: int | None,
 ) -> tuple[bool, str | None]:
-    """
-    Populate netsuite_core/data/inbound/{canonical csv names} from per-client staging
-    or from flat inbound when only one enabled client.
-    """
-    os.makedirs(INBOUND_ROOT, exist_ok=True)
-    client_dir = os.path.join(INBOUND_ROOT, client_uuid)
-
     inv_pat = (inventory_pattern or "inventory_snapshot").strip() or "inventory_snapshot"
-    as_pat = (annual_pattern or "annual_sold").strip() or "annual_sold"
+    as_pat = (annual_sold_pattern or "annual_sold").strip() or "annual_sold"
     po_pat = (po_pattern or "po_activity").strip() or "po_activity"
+    inbound = (sftp_inbound_path or "/inbound").strip() or "/inbound"
+    max_bytes = int(max_file_size_mb or 150) * 1024 * 1024
 
-    if os.path.isdir(client_dir):
-        inv = _newest_matching_csv(client_dir, inv_pat)
-        ass = _newest_matching_csv(client_dir, as_pat)
-        if not inv:
-            return False, f"No inventory CSV in {client_dir} matching pattern {inv_pat!r}."
-        if not ass:
-            return False, f"No annual_sold CSV in {client_dir} matching pattern {as_pat!r}."
-        _copy_to_canonical(inv[0], "inventory_snapshot.csv")
-        _copy_to_canonical(ass[0], "annual_sold.csv")
-        po = _newest_matching_csv(client_dir, po_pat)
-        po_dest = os.path.join(INBOUND_ROOT, "po_activity.csv")
-        if po:
-            _copy_to_canonical(po[0], "po_activity.csv")
-        elif os.path.isfile(po_dest):
-            os.remove(po_dest)
+    os.makedirs(INBOUND_ROOT, exist_ok=True)
+    inv_local = os.path.join(INBOUND_ROOT, "inventory_snapshot.csv")
+    as_local = os.path.join(INBOUND_ROOT, "annual_sold.csv")
+    po_local = os.path.join(INBOUND_ROOT, "po_activity.csv")
+
+    password = os.getenv((sftp_password_env_var or "").strip()) if sftp_password_env_var else sftp_password
+    pkey = _load_private_key_from_env((sftp_private_key_env_var or "").strip()) if sftp_private_key_env_var else None
+
+    transport = None
+    sftp = None
+    try:
+        transport = paramiko.Transport((sftp_host.strip(), int(sftp_port or 22)))
+        transport.connect(username=(sftp_username or "").strip(), password=password, pkey=pkey)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        inv_file = _sftp_newest_csv_name(sftp, inbound, inv_pat)
+        if not inv_file:
+            return False, f"No inventory CSV found in {inbound} matching pattern '{inv_pat}'."
+        inv_remote = f"{inbound.rstrip('/')}/{inv_file}"
+        with sftp.file(inv_remote, "rb") as rf:
+            inv_bytes = rf.read()
+        if len(inv_bytes) > max_bytes:
+            return False, f"Inventory file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+        with open(inv_local, "wb") as f:
+            f.write(inv_bytes)
+
+        as_file = _sftp_newest_csv_name(sftp, inbound, as_pat)
+        if not as_file:
+            return False, f"No annual_sold CSV found in {inbound} matching pattern '{as_pat}'."
+        as_remote = f"{inbound.rstrip('/')}/{as_file}"
+        with sftp.file(as_remote, "rb") as rf:
+            as_bytes = rf.read()
+        if len(as_bytes) > max_bytes:
+            return False, f"Annual sold file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+        with open(as_local, "wb") as f:
+            f.write(as_bytes)
+
+        po_file = _sftp_newest_csv_name(sftp, inbound, po_pat)
+        if po_file:
+            po_remote = f"{inbound.rstrip('/')}/{po_file}"
+            with sftp.file(po_remote, "rb") as rf:
+                po_bytes = rf.read()
+            if len(po_bytes) > max_bytes:
+                return False, f"PO file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+            with open(po_local, "wb") as f:
+                f.write(po_bytes)
+        elif os.path.exists(po_local):
+            os.remove(po_local)
         return True, None
-
-    if single_enabled_client:
-        inv_path = os.path.join(INBOUND_ROOT, "inventory_snapshot.csv")
-        as_path = os.path.join(INBOUND_ROOT, "annual_sold.csv")
-        if os.path.isfile(inv_path) and os.path.isfile(as_path):
-            return True, None
-        return (
-            False,
-            "Single-client flat inbound expected "
-            f"{inv_path} and {as_path}; missing files or create {client_dir}/ for isolation.",
-        )
-
-    return False, f"Missing per-client inbound directory: {client_dir}"
+    finally:
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
 
 
 def _run_hash(client_uuid: str) -> str:
@@ -205,7 +242,7 @@ def _email_attachments_from_buffers(buffers: dict) -> dict[str, bytes]:
     return out
 
 
-def process_client_row(row: dict, single_enabled_client: bool) -> None:
+def process_client_row(row: dict) -> None:
     client_uuid = row["client_uuid"]
     file_hash = _run_hash(client_uuid)
     log_key = f"govnr_daily_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
@@ -222,12 +259,23 @@ def process_client_row(row: dict, single_enabled_client: bool) -> None:
     po_pat = row.get("po_filename_pattern") or "po_activity"
 
     try:
-        ok, stage_err = stage_inbound_for_client(
-            client_uuid, inv_pat, as_pat, po_pat, single_enabled_client
+        ok, fetch_err = _download_client_inbound_files(
+            client_uuid=client_uuid,
+            sftp_host=str(row.get("sftp_host") or ""),
+            sftp_port=int(row.get("sftp_port") or 22),
+            sftp_username=str(row.get("sftp_username") or ""),
+            sftp_password=row.get("sftp_password"),
+            sftp_password_env_var=row.get("sftp_password_env_var"),
+            sftp_private_key_env_var=row.get("sftp_private_key_env_var"),
+            sftp_inbound_path=str(row.get("sftp_inbound_path") or "/inbound"),
+            inventory_pattern=inv_pat,
+            annual_sold_pattern=as_pat,
+            po_pattern=po_pat,
+            max_file_size_mb=int(row.get("max_file_size_mb") or 150),
         )
         if not ok:
-            log_ingestion_run(client_uuid, log_key, file_hash, "failed", stage_err)
-            print(f"[{client_uuid}] Staging failed: {stage_err}")
+            log_ingestion_run(client_uuid, log_key, file_hash, "failed", fetch_err)
+            print(f"[{client_uuid}] SFTP fetch failed: {fetch_err}")
             return
 
         if not contact:
@@ -294,9 +342,8 @@ def main() -> None:
     if not rows:
         print("No enabled client_ingestion_config rows found.")
         return
-    single = len(rows) == 1
     for row in rows:
-        process_client_row(dict(row), single_enabled_client=single)
+        process_client_row(dict(row))
     print("Govnr daily cron finished.")
 
 
