@@ -99,6 +99,7 @@ def fetch_enabled_cron_clients():
             SELECT
                 cfg.client_uuid::text AS client_uuid,
                 cfg.weekly_otb_limit,
+                cfg.delete_remote_after_success,
                 cfg.inventory_filename_pattern,
                 cfg.annual_sold_filename_pattern,
                 cfg.po_filename_pattern,
@@ -163,7 +164,7 @@ def _download_client_inbound_files(
     annual_sold_pattern: str,
     po_pattern: str,
     max_file_size_mb: int | None,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, list[str]]:
     inv_pat = (inventory_pattern or "inventory_snapshot").strip() or "inventory_snapshot"
     as_pat = (annual_sold_pattern or "annual_sold").strip() or "annual_sold"
     po_pat = (po_pattern or "po_activity").strip() or "po_activity"
@@ -180,6 +181,7 @@ def _download_client_inbound_files(
 
     transport = None
     sftp = None
+    remote_files_downloaded: list[str] = []
     try:
         transport = paramiko.Transport((sftp_host.strip(), int(sftp_port or 22)))
         transport.connect(username=(sftp_username or "").strip(), password=password, pkey=pkey)
@@ -187,25 +189,27 @@ def _download_client_inbound_files(
 
         inv_file = _sftp_newest_csv_name(sftp, inbound, inv_pat)
         if not inv_file:
-            return False, f"No inventory CSV found in {inbound} matching pattern '{inv_pat}'."
+            return False, f"No inventory CSV found in {inbound} matching pattern '{inv_pat}'.", remote_files_downloaded
         inv_remote = f"{inbound.rstrip('/')}/{inv_file}"
         with sftp.file(inv_remote, "rb") as rf:
             inv_bytes = rf.read()
         if len(inv_bytes) > max_bytes:
-            return False, f"Inventory file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+            return False, f"Inventory file exceeds max size ({int(max_file_size_mb or 150)} MB).", remote_files_downloaded
         with open(inv_local, "wb") as f:
             f.write(inv_bytes)
+        remote_files_downloaded.append(inv_remote)
 
         as_file = _sftp_newest_csv_name(sftp, inbound, as_pat)
         if not as_file:
-            return False, f"No annual_sold CSV found in {inbound} matching pattern '{as_pat}'."
+            return False, f"No annual_sold CSV found in {inbound} matching pattern '{as_pat}'.", remote_files_downloaded
         as_remote = f"{inbound.rstrip('/')}/{as_file}"
         with sftp.file(as_remote, "rb") as rf:
             as_bytes = rf.read()
         if len(as_bytes) > max_bytes:
-            return False, f"Annual sold file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+            return False, f"Annual sold file exceeds max size ({int(max_file_size_mb or 150)} MB).", remote_files_downloaded
         with open(as_local, "wb") as f:
             f.write(as_bytes)
+        remote_files_downloaded.append(as_remote)
 
         po_file = _sftp_newest_csv_name(sftp, inbound, po_pat)
         if po_file:
@@ -213,12 +217,46 @@ def _download_client_inbound_files(
             with sftp.file(po_remote, "rb") as rf:
                 po_bytes = rf.read()
             if len(po_bytes) > max_bytes:
-                return False, f"PO file exceeds max size ({int(max_file_size_mb or 150)} MB)."
+                return False, f"PO file exceeds max size ({int(max_file_size_mb or 150)} MB).", remote_files_downloaded
             with open(po_local, "wb") as f:
                 f.write(po_bytes)
+            remote_files_downloaded.append(po_remote)
         elif os.path.exists(po_local):
             os.remove(po_local)
-        return True, None
+        return True, None, remote_files_downloaded
+    finally:
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
+
+
+def _prune_remote_sftp_files(client: dict, remote_files_downloaded: list[str]) -> None:
+    if not remote_files_downloaded:
+        return
+    password = (
+        os.getenv((client.get("sftp_password_env_var") or "").strip())
+        if client.get("sftp_password_env_var")
+        else client.get("sftp_password")
+    )
+    pkey = (
+        _load_private_key_from_env((client.get("sftp_private_key_env_var") or "").strip())
+        if client.get("sftp_private_key_env_var")
+        else None
+    )
+
+    transport = None
+    sftp = None
+    try:
+        transport = paramiko.Transport((str(client.get("sftp_host") or "").strip(), int(client.get("sftp_port") or 22)))
+        transport.connect(username=str(client.get("sftp_username") or "").strip(), password=password, pkey=pkey)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        for remote_path in remote_files_downloaded:
+            try:
+                sftp.remove(remote_path)
+            except IOError:
+                pass
+        print(f"[{client.get('client_uuid')}] Remote SFTP files successfully pruned from drop zone.")
     finally:
         if sftp:
             sftp.close()
@@ -259,7 +297,7 @@ def process_client_row(row: dict) -> None:
     po_pat = row.get("po_filename_pattern") or "po_activity"
 
     try:
-        ok, fetch_err = _download_client_inbound_files(
+        ok, fetch_err, remote_files_downloaded = _download_client_inbound_files(
             client_uuid=client_uuid,
             sftp_host=str(row.get("sftp_host") or ""),
             sftp_port=int(row.get("sftp_port") or 22),
@@ -317,6 +355,8 @@ def process_client_row(row: dict) -> None:
             "Attached: CFO strategic brief (PDF) and CSV hit-lists from today's Govnr run.\n",
         )
         send_outbound_email(contact, subject, body, attachments)
+        if row.get("delete_remote_after_success"):
+            _prune_remote_sftp_files(row, remote_files_downloaded)
         log_ingestion_run(client_uuid, log_key, file_hash, "success", None)
         print(f"[{client_uuid}] Outbound email sent to {contact!r}.")
     except Exception as e:
