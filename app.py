@@ -520,6 +520,7 @@ def enterprise_ingestion_admin_page():
                                     result = run_daily_governor(
                                         client_uuid=client_uuid,
                                         weekly_otb_limit=float(weekly_otb_limit),
+                                        company_name=st.session_state["company_name"],
                                     )
                                 out = report_buffer.getvalue()
                                 st.subheader("Govnr pipeline output")
@@ -826,7 +827,7 @@ def main_dashboard():
     if app_mode == "Welcome":
         st.title("Govnr: Strategic Compliance Brief")
         st.success("Authentication Verified. Secure connection established.")
-        st.write(f"Your System Client UUID: {st.session_state['client_uuid']}")
+        st.write(f"Welcome, {st.session_state['company_name']}.")
         st.write("Please select a module from the sidebar to begin.")
 
     elif app_mode == "Executive Dashboard":
@@ -983,6 +984,7 @@ def main_dashboard():
                     result = run_daily_governor(
                         client_uuid=st.session_state["client_uuid"],
                         run_tier=tier,
+                        company_name=st.session_state["company_name"],
                     )
 
             st.session_state["manual_exec_stdout"] = report_buffer.getvalue()

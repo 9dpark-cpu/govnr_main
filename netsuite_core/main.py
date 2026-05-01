@@ -174,8 +174,10 @@ def run_daily_governor(
     client_uuid: str,
     weekly_otb_limit: float | None = None,
     run_tier: str | None = None,
+    company_name: str | None = None,
 ):
-    print(f"[{client_uuid}] Initializing Govnr Pipeline...\n")
+    display_name = (company_name or "").strip() or client_uuid
+    print(f"[{display_name}] Initializing Govnr Pipeline...\n")
 
     cfg = fetch_ingestion_config(client_uuid)
     if weekly_otb_limit is not None:
