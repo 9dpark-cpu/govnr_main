@@ -189,13 +189,6 @@ def stage_inbound_for_client(
     return False, f"Missing per-client inbound directory: {client_dir}"
 
 
-def _destroy_raw_erp_canonical() -> None:
-    for name in RAW_ERP_CANONICAL:
-        path = os.path.join(INBOUND_ROOT, name)
-        if os.path.isfile(path):
-            os.remove(path)
-
-
 def _run_hash(client_uuid: str) -> str:
     stamp = datetime.now(timezone.utc).isoformat()
     return hashlib.sha256(f"{client_uuid}|{stamp}".encode()).hexdigest()
@@ -283,7 +276,16 @@ def process_client_row(row: dict, single_enabled_client: bool) -> None:
         log_ingestion_run(client_uuid, log_key, file_hash, "failed", err[:8000])
         print(f"[{client_uuid}] ERROR: {e}")
     finally:
-        _destroy_raw_erp_canonical()
+        client_inbound_dir = os.path.join(
+            REPO_ROOT, "netsuite_core", "data", "inbound", str(client_uuid)
+        )
+        if os.path.exists(client_inbound_dir):
+            shutil.rmtree(client_inbound_dir)
+            print(f"[{client_uuid}] Data destruction mandate executed. Raw files purged.")
+        for name in RAW_ERP_CANONICAL:
+            path = os.path.join(INBOUND_ROOT, name)
+            if os.path.isfile(path):
+                os.remove(path)
 
 
 def main() -> None:
