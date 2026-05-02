@@ -61,7 +61,7 @@ def send_outbound_email(
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = user
+    msg["From"] = '"Govnr Advisory" <advisory@getgovnr.com>'
     msg["To"] = recipient_email
     msg.set_content(body_text)
 
