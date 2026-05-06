@@ -14,3 +14,7 @@
 ## 3. Nomenclature & Typography
 - Adhere strictly to the Govnr Data Dictionary (e.g., `Item_Identifier`, `Unit_Average_Cost`, `Quantity_On_Hand`). Do NOT revert to generic terms like `SKU` or `Qty`.
 - NEVER use smart quotes, non-breaking spaces, or emojis in Python code or UI strings. Use strict UTF-8 / ASCII.
+
+
+## 4. Business architecture
+- Always Reference: '.govnr_architecture.md' file so you understand the business architecture's context.

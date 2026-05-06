@@ -21,6 +21,7 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
             po_filename_pattern VARCHAR(255) DEFAULT 'po_activity',
             delete_remote_after_success BOOLEAN DEFAULT FALSE,
             weekly_otb_limit NUMERIC(15, 2) DEFAULT 100000.00,
+            min_transfer_value_threshold NUMERIC(15, 2) DEFAULT 1000.00,
             inventory_column_mapping JSONB DEFAULT '{}'::jsonb,
             annual_sold_column_mapping JSONB DEFAULT '{}'::jsonb,
             po_column_mapping JSONB DEFAULT '{}'::jsonb,
@@ -39,6 +40,9 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
     )
     cursor.execute(
         "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS weekly_otb_limit NUMERIC(15, 2) DEFAULT 100000.00;"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS min_transfer_value_threshold NUMERIC(15, 2) DEFAULT 1000.00;"
     )
     cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_cash;")
     cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_ap;")

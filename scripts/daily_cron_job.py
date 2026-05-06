@@ -111,7 +111,8 @@ def fetch_enabled_cron_clients():
                 cfg.sftp_private_key_env_var,
                 cfg.sftp_inbound_path,
                 cfg.max_file_size_mb,
-                c.contact_email
+                c.contact_email,
+                c.company_name
             FROM client_ingestion_config cfg
             JOIN clients c ON c.client_uuid = cfg.client_uuid
             WHERE cfg.enabled = TRUE
@@ -346,10 +347,11 @@ def process_client_row(row: dict) -> None:
             print(f"[{client_uuid}] Empty buffers.")
             return
 
-        subject = os.getenv(
-            "GOVNR_OUTBOUND_SUBJECT",
-            f"Govnr daily strategic brief ({client_uuid[:8]}...)",
+        company_name = (row.get("company_name") or "").strip()
+        default_subject = (
+            f"Govnr Strategic Brief: {company_name}" if company_name else "Govnr Strategic Brief"
         )
+        subject = os.getenv("GOVNR_OUTBOUND_SUBJECT", default_subject)
         body = os.getenv(
             "GOVNR_OUTBOUND_BODY",
             "Attached: CFO strategic brief (PDF) and CSV hit-lists from today's Govnr run.\n",
