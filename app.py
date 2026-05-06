@@ -39,11 +39,14 @@ def login_page():
     
     with tab1:
         st.subheader("Client Login")
-        # Unique keys: both tabs run every script execution; keys prevent widget identity collisions.
-        email = st.text_input("Work Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
+        # Streamlit forms support Enter-to-submit from focused fields (including password input).
+        with st.form("login_form", clear_on_submit=False):
+            # Unique keys: both tabs run every script execution; keys prevent widget identity collisions.
+            email = st.text_input("Work Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Access Dashboard")
 
-        if st.button("Access Dashboard", key="btn_login"):
+        if submitted:
             if email and password:
                 with st.spinner("Signing in…"):
                     success, result = auth.login_client(email, password)
