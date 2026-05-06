@@ -162,6 +162,20 @@ def _load_private_key_from_env(env_var_name: str):
 def _sftp_newest_csv_name(sftp, inbound_path: str, pattern: str):
     """Return filename of newest .csv in inbound_path whose name contains pattern (case-insensitive)."""
     candidates = []
+    raw_names = sftp.listdir(inbound_path)
+    print(f"[DEBUG sftp.listdir] inbound_path={inbound_path} names={raw_names}")
+    # region agent log
+    _debug_log(
+        "H2",
+        "scripts/daily_cron_job.py:_sftp_newest_csv_name",
+        "Raw sftp.listdir names",
+        {
+            "inbound_path": inbound_path,
+            "pattern": pattern,
+            "raw_names": raw_names,
+        },
+    )
+    # endregion
     entries = sftp.listdir_attr(inbound_path)
     # region agent log
     _debug_log(
