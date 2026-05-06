@@ -56,7 +56,6 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
             """
             SELECT
                 weekly_otb_limit,
-                transfer_hurdle_limit,
                 min_transfer_value_threshold,
                 inventory_filename_pattern,
                 annual_sold_filename_pattern,
@@ -80,7 +79,6 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
             legacy_inv, legacy_po = _split_po_prefix_from_inventory_map(legacy_inv)
             return {
                 "weekly_otb_limit": None,
-                "transfer_hurdle_limit": None,
                 "min_transfer_value_threshold": None,
                 "inventory_filename_pattern": "inventory_snapshot",
                 "annual_sold_filename_pattern": "annual_sold",
@@ -109,7 +107,6 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
 
         return {
             "weekly_otb_limit": row.get("weekly_otb_limit"),
-            "transfer_hurdle_limit": row.get("transfer_hurdle_limit"),
             "min_transfer_value_threshold": row.get("min_transfer_value_threshold"),
             "inventory_filename_pattern": row.get("inventory_filename_pattern") or "inventory_snapshot",
             "annual_sold_filename_pattern": row.get("annual_sold_filename_pattern") or "annual_sold",
@@ -151,18 +148,3 @@ def resolve_min_transfer_value_threshold(raw: Optional[Any]) -> tuple[float, boo
         return v, False
     except (TypeError, ValueError):
         return 1000.0, True
-
-
-def resolve_transfer_hurdle_limit(raw: Optional[Any]) -> tuple[float, bool]:
-    """
-    Returns (threshold, used_fallback). Invalid or missing -> 250.0 and fallback True.
-    """
-    import math
-
-    try:
-        v = float(raw)
-        if math.isnan(v) or v < 0:
-            return 250.0, True
-        return v, False
-    except (TypeError, ValueError):
-        return 250.0, True

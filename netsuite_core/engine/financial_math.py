@@ -33,10 +33,10 @@ def calculate_financial_health(
     df_inv: pl.DataFrame,
     df_po: pl.DataFrame,
     weekly_otb_limit: float = 100_000.0,
-    transfer_hurdle_limit: float = 250.0,
     min_transfer_value_threshold: float = MIN_TRANSFER_VALUE_THRESHOLD,
 ):
     current_date = date.today()
+    effective_transfer_threshold = max(float(min_transfer_value_threshold or 0.0), 0.0)
 
     df_master = coerce_scalar_string_columns(df_inv, _STRING_COLS_FOR_ENGINE).with_columns([
         pl.max_horizontal(pl.col("Quantity_Available").fill_null(0) + pl.col("Quantity_Committed").fill_null(0), 0.0).alias(
@@ -131,7 +131,10 @@ def calculate_financial_health(
             (
                 (pl.col("_min_days") < 15)
                 & (pl.col("_max_days") > 180)
-                & (pl.col("Potential_Transfer_Value").fill_null(0.0) >= pl.lit(transfer_hurdle_limit))
+                & (
+                    pl.col("Potential_Transfer_Value").fill_null(0.0)
+                    >= pl.lit(effective_transfer_threshold, dtype=pl.Float64)
+                )
             ).alias("Inter_Branch_Misallocation")
         )
     )
@@ -213,7 +216,6 @@ def calculate_financial_health(
     integrity_qty = int(df_integrity["Quantity_On_Hand"].sum() or 0)
     integrity_item_count = int(df_integrity["Item_Identifier"].n_unique() or 0)
 
-    effective_transfer_threshold = max(float(min_transfer_value_threshold or 0.0), 0.0)
     df_transfer = df_master.filter(
         pl.col("Inter_Branch_Misallocation")
         & (pl.col("Transfer_Capital_Value") >= pl.lit(effective_transfer_threshold, dtype=pl.Float64))

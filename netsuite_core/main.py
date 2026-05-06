@@ -17,7 +17,6 @@ import auth
 from engine.erp_config_loader import (
     fetch_ingestion_config,
     resolve_min_transfer_value_threshold,
-    resolve_transfer_hurdle_limit,
     resolve_weekly_otb_limit,
 )
 from engine.financial_math import calculate_financial_health
@@ -178,7 +177,6 @@ def _persist_audit_csvs_to_outbound(buffers: dict) -> None:
 def run_daily_governor(
     client_uuid: str,
     weekly_otb_limit: float | None = None,
-    transfer_hurdle_limit: float | None = None,
     min_transfer_value_threshold: float | None = None,
     run_tier: str | None = None,
     company_name: str | None = None,
@@ -194,16 +192,7 @@ def run_daily_governor(
     if used_fallback:
         print(
             "[Govnr] Weekly_OTB_Limit missing or invalid; using default 100000.00. "
-            "Update ERP Integration Settings to set your CFO-approved ceiling."
-        )
-    if transfer_hurdle_limit is not None:
-        thl, thl_fallback = resolve_transfer_hurdle_limit(transfer_hurdle_limit)
-    else:
-        thl, thl_fallback = resolve_transfer_hurdle_limit(cfg.get("transfer_hurdle_limit"))
-    if thl_fallback:
-        print(
-            "[Govnr] transfer_hurdle_limit missing or invalid; using default 250.00. "
-            "Update ERP Integration Settings to set your CFO-approved transfer hurdle."
+            "Set it under Executive Dashboard (CFO limits) in the Streamlit app."
         )
     if min_transfer_value_threshold is not None:
         mtv, mtv_fallback = resolve_min_transfer_value_threshold(min_transfer_value_threshold)
@@ -212,7 +201,7 @@ def run_daily_governor(
     if mtv_fallback:
         print(
             "[Govnr] min_transfer_value_threshold missing or invalid; using default 1000.00. "
-            "Update ERP Integration Settings to set your operational transfer floor."
+            "Set it under Executive Dashboard (CFO limits) in the Streamlit app."
         )
 
     try:
@@ -233,7 +222,6 @@ def run_daily_governor(
         df_inv_raw,
         df_po_raw,
         weekly_otb_limit=float(wlim),
-        transfer_hurdle_limit=float(thl),
         min_transfer_value_threshold=float(mtv),
     )
     _persist_audit_csvs_to_outbound(generated_buffers)

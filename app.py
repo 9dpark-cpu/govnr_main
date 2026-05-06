@@ -221,9 +221,13 @@ def _log_ingestion_run_row(client_uuid: str, file_name: str, file_hash: str, sta
         conn.close()
 
 
-def enterprise_ingestion_admin_page():
-    st.title("ERP SFTP Connections")
-    st.caption("Configure SFTP ingestion settings for the authenticated client and review recent ingestion runs.")
+def onboarding_settings_page() -> None:
+    """SFTP automation + CSV column mapping (single onboarding surface). CFO limits live on Executive Dashboard."""
+    st.title("Onboarding Settings")
+    st.caption(
+        "Configure automated file pickup (SFTP) and one-time CSV column mapping. "
+        "**Weekly OTB limit** and **minimum transfer value** are saved on the **Executive Dashboard**."
+    )
 
     if not auth.enterprise_ingestion_tables_exist():
         st.warning(
@@ -246,7 +250,14 @@ def enterprise_ingestion_admin_page():
         st.stop()
 
     client_uuid = st.session_state["client_uuid"]
+    tab_sftp, tab_mapping = st.tabs(["SFTP & automation", "Column mapping (CSV)"])
+    with tab_sftp:
+        _render_sftp_automation_tab(client_uuid)
+    with tab_mapping:
+        _render_column_mapping_tab(client_uuid)
 
+
+def _render_sftp_automation_tab(client_uuid: str) -> None:
     conn = auth.get_db_connection()
     cursor = conn.cursor()
     try:
@@ -264,8 +275,6 @@ def enterprise_ingestion_admin_page():
                 annual_sold_filename_pattern,
                 po_filename_pattern,
                 delete_remote_after_success,
-                weekly_otb_limit,
-                min_transfer_value_threshold,
                 max_file_size_mb
             FROM client_ingestion_config
             WHERE client_uuid = %s
@@ -325,25 +334,7 @@ def enterprise_ingestion_admin_page():
             help="Substring match for mandatory 365-day velocity CSV (case-insensitive).",
         )
 
-        col10, col11, col12 = st.columns(3)
-        weekly_otb_limit = float(
-            col10.number_input(
-                "Weekly OTB limit ($)",
-                value=float(existing.get("weekly_otb_limit") or 100000.0),
-                step=1000.0,
-                help="CFO-approved maximum draft PO exposure for a rolling 7-day window.",
-            )
-        )
-        min_transfer_value_threshold = float(
-            col11.number_input(
-                "Minimum transfer value ($)",
-                value=float(existing.get("min_transfer_value_threshold") or 1000.0),
-                min_value=0.0,
-                step=100.0,
-                help="Suppress low-materiality transfer alerts below this dollar value.",
-            )
-        )
-        delete_remote_after_success = col12.checkbox(
+        delete_remote_after_success = st.checkbox(
             "Delete remote after success",
             value=bool(existing.get("delete_remote_after_success", False)),
             help="Keep disabled until your workflow is fully validated.",
@@ -375,13 +366,11 @@ def enterprise_ingestion_admin_page():
                             annual_sold_filename_pattern,
                             po_filename_pattern,
                             delete_remote_after_success,
-                            weekly_otb_limit,
-                            min_transfer_value_threshold,
                             max_file_size_mb,
                             updated_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
                         )
                         ON CONFLICT (client_uuid) DO UPDATE SET
                             enabled = EXCLUDED.enabled,
@@ -396,8 +385,6 @@ def enterprise_ingestion_admin_page():
                             annual_sold_filename_pattern = EXCLUDED.annual_sold_filename_pattern,
                             po_filename_pattern = EXCLUDED.po_filename_pattern,
                             delete_remote_after_success = EXCLUDED.delete_remote_after_success,
-                            weekly_otb_limit = EXCLUDED.weekly_otb_limit,
-                            min_transfer_value_threshold = EXCLUDED.min_transfer_value_threshold,
                             max_file_size_mb = EXCLUDED.max_file_size_mb,
                             updated_at = CURRENT_TIMESTAMP
                         """,
@@ -414,8 +401,6 @@ def enterprise_ingestion_admin_page():
                             annual_sold_pattern.strip() or "annual_sold",
                             po_pattern.strip() or "po_activity",
                             delete_remote_after_success,
-                            weekly_otb_limit,
-                            min_transfer_value_threshold,
                             max_file_size_mb,
                         ),
                     )
@@ -535,8 +520,6 @@ def enterprise_ingestion_admin_page():
                                 with redirect_stdout(report_buffer):
                                     result = run_daily_governor(
                                         client_uuid=client_uuid,
-                                        weekly_otb_limit=float(weekly_otb_limit),
-                                        min_transfer_value_threshold=float(min_transfer_value_threshold),
                                         company_name=st.session_state["company_name"],
                                     )
                                 out = report_buffer.getvalue()
@@ -595,14 +578,9 @@ def enterprise_ingestion_admin_page():
         st.dataframe(pd.DataFrame(run_rows), use_container_width=True)
 
 
-def erp_integration_settings_page():
-    """Persist ERP CSV mappings and Weekly_OTB_Limit to client_ingestion_config for all account tiers."""
-    from engine.erp_config_loader import (
-        fetch_ingestion_config,
-        resolve_min_transfer_value_threshold,
-        resolve_transfer_hurdle_limit,
-        resolve_weekly_otb_limit,
-    )
+def _render_column_mapping_tab(client_uuid: str) -> None:
+    """Rosetta Stone mapping only. Filename patterns are edited under SFTP & automation."""
+    from engine.erp_config_loader import fetch_ingestion_config
     from engine.erp_mapping_validation import (
         FLOAT_ANNUAL_SOLD_FIELDS,
         FLOAT_INVENTORY_FIELDS,
@@ -614,80 +592,11 @@ def erp_integration_settings_page():
     )
     from engine.netsuite_parser import ANNUAL_SOLD_REQUIRED_BACKEND, INVENTORY_REQUIRED_BACKEND, PO_REQUIRED_BACKEND
 
-    st.title("Data Mapping & Rules")
+    st.subheader("Column mapping (CSV)")
     st.caption(
-        "Upload sample CSVs, map columns, and save. Diagnostic accounts keep automated SFTP disabled; "
-        "stored mappings and OTB limits still drive the math engine and Manual Execution."
+        "Upload sample exports and map headers to Govnr fields. Save is blocked until validation passes. "
+        "SFTP filename patterns are configured in the other tab. CFO limits are on the Executive Dashboard."
     )
-    client_uuid = st.session_state["client_uuid"]
-    auth.ensure_transfer_hurdle_column()
-    cfg = fetch_ingestion_config(client_uuid)
-    w_raw, used_fallback = resolve_weekly_otb_limit(cfg.get("weekly_otb_limit"))
-    th_raw, th_used_fallback = resolve_transfer_hurdle_limit(cfg.get("transfer_hurdle_limit"))
-    mtv_raw, mtv_used_fallback = resolve_min_transfer_value_threshold(cfg.get("min_transfer_value_threshold"))
-    if used_fallback:
-        st.warning(
-            "Weekly OTB limit was missing or invalid in the database; showing 100000.00 until you save a valid value."
-        )
-    if mtv_used_fallback:
-        st.warning(
-            "Minimum transfer value was missing or invalid in the database; showing 1000.00 until you save a valid value."
-        )
-    if th_used_fallback:
-        st.warning(
-            "Minimum transfer hurdle was missing or invalid in the database; showing 250.00 until you save a valid value."
-        )
-
-    cpat1, cpat2, cpat3 = st.columns(3)
-    inv_pat = cpat1.text_input(
-        "Inventory filename pattern (SFTP match)",
-        value=str(cfg.get("inventory_filename_pattern") or "inventory_snapshot"),
-        help="Substring match for newest CSV on SFTP (case-insensitive).",
-        key="erp_cfg_inv_pat",
-    )
-    as_pat = cpat2.text_input(
-        "Annual sold filename pattern (SFTP match)",
-        value=str(cfg.get("annual_sold_filename_pattern") or "annual_sold"),
-        key="erp_cfg_as_pat",
-    )
-    po_pat = cpat3.text_input(
-        "PO filename pattern (SFTP match)",
-        value=str(cfg.get("po_filename_pattern") or "po_activity"),
-        key="erp_cfg_po_pat",
-    )
-
-    col_rule_1, col_rule_2, col_rule_3 = st.columns(3)
-    weekly_otb_limit = float(
-        col_rule_1.number_input(
-            "Weekly OTB limit ($)",
-            value=float(w_raw),
-            min_value=0.0,
-            step=1000.0,
-            help="CFO-approved rolling 7-day draft PO ceiling (stored in client_ingestion_config).",
-            key="erp_cfg_weekly_otb",
-        )
-    )
-    transfer_hurdle_limit = float(
-        col_rule_2.number_input(
-            "Minimum transfer hurdle ($)",
-            value=float(th_raw),
-            min_value=0.0,
-            step=50.0,
-            help="CFO-controlled transfer hurdle used by inter-branch misallocation logic.",
-            key="erp_cfg_transfer_hurdle",
-        )
-    )
-    min_transfer_value_threshold = float(
-        col_rule_3.number_input(
-            "Minimum transfer value ($)",
-            value=float(mtv_raw),
-            min_value=0.0,
-            step=100.0,
-            help="Warehouse transfer alert floor. Alerts below this value are suppressed.",
-            key="erp_cfg_min_transfer_value",
-        )
-    )
-
     st.markdown("---")
     st.subheader("Sample files for mapping (pre-flight validation only)")
     inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="erp_fu_inv")
@@ -698,6 +607,7 @@ def erp_integration_settings_page():
         st.info("Upload **inventory** and **annual_sold** sample exports to configure column mappings.")
         return
 
+    cfg = fetch_ingestion_config(client_uuid)
     raw_inv = pl.read_csv(inv_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
     raw_as = pl.read_csv(as_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
     raw_po = (
@@ -824,17 +734,18 @@ def erp_integration_settings_page():
                 st.warning(msg)
             st.stop()
 
-        auth.upsert_client_ingestion_erp_settings(
+        cfg_pat = fetch_ingestion_config(client_uuid)
+        inv_pat = str(cfg_pat.get("inventory_filename_pattern") or "inventory_snapshot").strip()
+        as_pat = str(cfg_pat.get("annual_sold_filename_pattern") or "annual_sold").strip()
+        po_pat = str(cfg_pat.get("po_filename_pattern") or "po_activity").strip()
+        auth.upsert_client_ingestion_column_mappings(
             client_uuid,
-            weekly_otb_limit,
-            transfer_hurdle_limit,
-            min_transfer_value_threshold,
+            inv_pat,
+            as_pat,
+            po_pat,
             inv_out,
             as_out,
             po_out,
-            inv_pat.strip(),
-            as_pat.strip(),
-            po_pat.strip(),
         )
 
         inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
@@ -853,7 +764,7 @@ def erp_integration_settings_page():
             os.remove(po_path)
 
         st.success(
-            "Mapping configuration, OTB limit, and minimum transfer value saved to client_ingestion_config. "
+            "Column mappings and filename patterns saved to client_ingestion_config. "
             "Local inbound CSVs were updated for the next Manual Execution."
         )
 
@@ -873,9 +784,8 @@ def main_dashboard():
         [
             "Welcome",
             "Executive Dashboard",
-            "Data Mapping & Rules",
+            "Onboarding Settings",
             "Manual Execution",
-            "ERP SFTP Connections",
         ],
         key="govnr_nav_module",
     )
@@ -889,6 +799,50 @@ def main_dashboard():
     elif app_mode == "Executive Dashboard":
         st.title("Executive Financial Dashboard")
         st.write("Historical trends and key performance indicators based on your Govnr syncs.")
+
+        client_uuid_dash = st.session_state["client_uuid"]
+        from engine.erp_config_loader import (
+            fetch_ingestion_config,
+            resolve_min_transfer_value_threshold,
+            resolve_weekly_otb_limit,
+        )
+
+        _cfg_dash = fetch_ingestion_config(client_uuid_dash)
+        _w_show, _ = resolve_weekly_otb_limit(_cfg_dash.get("weekly_otb_limit"))
+        _m_show, _ = resolve_min_transfer_value_threshold(_cfg_dash.get("min_transfer_value_threshold"))
+
+        st.subheader("CFO limits")
+        st.caption(
+            "Weekly OTB and minimum transfer value are stored in PostgreSQL and drive the math engine. "
+            "Update here anytime without re-uploading CSV samples."
+        )
+        with st.form("exec_dashboard_cfo_limits"):
+            fc1, fc2 = st.columns(2)
+            cfo_weekly_otb = fc1.number_input(
+                "Weekly OTB limit ($)",
+                min_value=0.0,
+                step=1000.0,
+                value=float(_w_show),
+                help="Rolling 7-day draft PO ceiling (cash collision threshold).",
+                key="dash_cfo_weekly_otb",
+            )
+            cfo_min_transfer = fc2.number_input(
+                "Minimum transfer value ($)",
+                min_value=0.0,
+                step=100.0,
+                value=float(_m_show),
+                help="Floor for inter-branch misallocation detection and transfer alerts.",
+                key="dash_cfo_min_transfer",
+            )
+            if st.form_submit_button("Save CFO limits"):
+                auth.save_client_ingestion_financial_limits(
+                    client_uuid_dash,
+                    float(cfo_weekly_otb),
+                    float(cfo_min_transfer),
+                )
+                st.success("CFO limits saved. The next engine run will use these values.")
+
+        st.markdown("---")
 
         records = auth.get_client_metrics_history(st.session_state["client_uuid"])
         df_history = pd.DataFrame(records) if records else pd.DataFrame()
@@ -1005,8 +959,8 @@ def main_dashboard():
             else:
                 st.caption("Outbound report directory is not present yet.")
 
-    elif app_mode == "Data Mapping & Rules":
-        erp_integration_settings_page()
+    elif app_mode == "Onboarding Settings":
+        onboarding_settings_page()
 
     elif app_mode == "Manual Execution":
         st.title("Manual Execution")
@@ -1015,12 +969,12 @@ def main_dashboard():
         st.info(
             "Runs the Govnr engine on CSVs already placed in the secure inbound folder: "
             "**inventory_snapshot.csv**, **annual_sold.csv**, and optionally **po_activity.csv**. "
-            "Use **Data Mapping & Rules** to upload samples, map columns, set your Weekly OTB limit, "
-            "and define SFTP filename patterns."
+            "Use **Onboarding Settings** to map columns and SFTP patterns; set **Weekly OTB** and "
+            "**minimum transfer value** on the Executive Dashboard."
         )
         if tier == "diagnostic":
             st.caption(
-                "Diagnostic tier: place files in inbound (or save from Data Mapping & Rules) and run from here."
+                "Diagnostic tier: place files in inbound (or save from Onboarding Settings) and run from here."
             )
         else:
             st.markdown(
@@ -1119,9 +1073,6 @@ def main_dashboard():
                 "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
                 "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
             )
-    elif app_mode == "ERP SFTP Connections":
-        enterprise_ingestion_admin_page()
-
 if __name__ == "__main__":
     if st.session_state.get("authenticated", False):
         main_dashboard()
