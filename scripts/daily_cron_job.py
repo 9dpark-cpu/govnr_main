@@ -17,6 +17,7 @@ import shutil
 import sys
 import traceback
 from datetime import datetime, timezone
+import json
 
 import paramiko
 import psycopg2
@@ -42,6 +43,27 @@ RAW_ERP_CANONICAL = (
 )
 DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "15"))
 CRON_SOURCE = "cron_outbound"
+DEBUG_LOG_PATH = os.path.join(REPO_ROOT, "debug-b461b9.log")
+DEBUG_SESSION_ID = "b461b9"
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # region agent log
+    payload = {
+        "sessionId": DEBUG_SESSION_ID,
+        "runId": "initial",
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+    }
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # endregion
 
 
 def _database_url() -> str:
@@ -140,12 +162,39 @@ def _load_private_key_from_env(env_var_name: str):
 def _sftp_newest_csv_name(sftp, inbound_path: str, pattern: str):
     """Return filename of newest .csv in inbound_path whose name contains pattern (case-insensitive)."""
     candidates = []
-    for entry in sftp.listdir_attr(inbound_path):
+    entries = sftp.listdir_attr(inbound_path)
+    # region agent log
+    _debug_log(
+        "H2",
+        "scripts/daily_cron_job.py:_sftp_newest_csv_name",
+        "Listed remote inbound directory",
+        {
+            "inbound_path": inbound_path,
+            "pattern": pattern,
+            "entry_count": len(entries),
+            "entries_sample": [e.filename for e in entries[:20]],
+        },
+    )
+    # endregion
+    for entry in entries:
         if not stat.S_ISREG(entry.st_mode):
             continue
         name_lower = entry.filename.lower()
         if pattern.lower() in name_lower and name_lower.endswith(".csv"):
             candidates.append((entry.st_mtime, entry.filename))
+    # region agent log
+    _debug_log(
+        "H3",
+        "scripts/daily_cron_job.py:_sftp_newest_csv_name",
+        "Computed candidate files",
+        {
+            "inbound_path": inbound_path,
+            "pattern": pattern,
+            "candidate_count": len(candidates),
+            "candidates": [name for _, name in candidates[:20]],
+        },
+    )
+    # endregion
     if not candidates:
         return None
     candidates.sort(key=lambda x: x[0], reverse=True)
@@ -171,6 +220,25 @@ def _download_client_inbound_files(
     po_pat = (po_pattern or "po_activity").strip() or "po_activity"
     inbound = (sftp_inbound_path or "/inbound").strip() or "/inbound"
     max_bytes = int(max_file_size_mb or 150) * 1024 * 1024
+    # region agent log
+    _debug_log(
+        "H1",
+        "scripts/daily_cron_job.py:_download_client_inbound_files",
+        "Resolved inbound and file patterns",
+        {
+            "client_uuid": client_uuid,
+            "inbound": inbound,
+            "inventory_pattern_raw": inventory_pattern,
+            "inventory_pattern_resolved": inv_pat,
+            "annual_sold_pattern_resolved": as_pat,
+            "po_pattern_resolved": po_pat,
+            "max_file_size_mb": int(max_file_size_mb or 150),
+            "sftp_port": int(sftp_port or 22),
+            "host_nonempty": bool((sftp_host or "").strip()),
+            "username_nonempty": bool((sftp_username or "").strip()),
+        },
+    )
+    # endregion
 
     os.makedirs(INBOUND_ROOT, exist_ok=True)
     inv_local = os.path.join(INBOUND_ROOT, "inventory_snapshot.csv")
@@ -190,6 +258,18 @@ def _download_client_inbound_files(
 
         inv_file = _sftp_newest_csv_name(sftp, inbound, inv_pat)
         if not inv_file:
+            # region agent log
+            _debug_log(
+                "H4",
+                "scripts/daily_cron_job.py:_download_client_inbound_files",
+                "Inventory file missing after directory scan",
+                {
+                    "client_uuid": client_uuid,
+                    "inbound": inbound,
+                    "inventory_pattern_resolved": inv_pat,
+                },
+            )
+            # endregion
             return False, f"No inventory CSV found in {inbound} matching pattern '{inv_pat}'.", remote_files_downloaded
         inv_remote = f"{inbound.rstrip('/')}/{inv_file}"
         with sftp.file(inv_remote, "rb") as rf:
@@ -362,6 +442,18 @@ def process_client_row(row: dict) -> None:
         log_ingestion_run(client_uuid, log_key, file_hash, "success", None)
         print(f"[{client_uuid}] Outbound email sent to {contact!r}.")
     except Exception as e:
+        # region agent log
+        _debug_log(
+            "H5",
+            "scripts/daily_cron_job.py:process_client_row",
+            "Unhandled exception in cron client processing",
+            {
+                "client_uuid": client_uuid,
+                "exception_type": type(e).__name__,
+                "exception_message": str(e)[:500],
+            },
+        )
+        # endregion
         err = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
         log_ingestion_run(client_uuid, log_key, file_hash, "failed", err[:8000])
         print(f"[{client_uuid}] ERROR: {e}")
