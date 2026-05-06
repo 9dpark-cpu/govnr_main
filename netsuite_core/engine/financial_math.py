@@ -14,6 +14,8 @@ from engine.polars_list_compat import coerce_scalar_string_columns
 from engine.report_generator import generate_audit_csv_buffers, print_cfo_report
 from engine.report_generator_pdf import generate_cfo_pdf
 
+MIN_TRANSFER_VALUE_THRESHOLD = 50.0
+
 _STRING_COLS_FOR_ENGINE = (
     "Item_Identifier",
     "Item_Location",
@@ -31,6 +33,8 @@ def calculate_financial_health(
     df_inv: pl.DataFrame,
     df_po: pl.DataFrame,
     weekly_otb_limit: float = 100_000.0,
+    transfer_hurdle_limit: float = 250.0,
+    min_transfer_value_threshold: float = MIN_TRANSFER_VALUE_THRESHOLD,
 ):
     current_date = date.today()
 
@@ -96,14 +100,97 @@ def calculate_financial_health(
 
     loc_min = df_master.group_by("Item_Identifier").agg(pl.col("Location_Days_Supply").min().alias("_min_days"))
     loc_max = df_master.group_by("Item_Identifier").agg(pl.col("Location_Days_Supply").max().alias("_max_days"))
-    df_loc_bounds = loc_min.join(loc_max, on="Item_Identifier", how="inner").with_columns(
-        ((pl.col("_min_days") < 15) & (pl.col("_max_days") > 180)).alias("Inter_Branch_Misallocation")
+
+    df_transfer_math = (
+        df_master.with_columns([
+            pl.max_horizontal(
+                pl.col("Quantity_Available").fill_null(0.0) - pl.col("Target_Stock_Level").fill_null(0.0), 0.0
+            ).alias("_surplus"),
+            pl.max_horizontal(
+                pl.col("Target_Stock_Level").fill_null(0.0) - pl.col("Quantity_Available").fill_null(0.0), 0.0
+            ).alias("_deficit"),
+        ])
+        .group_by("Item_Identifier")
+        .agg([
+            pl.col("_surplus").sum().alias("_total_surplus"),
+            pl.col("_deficit").sum().alias("_total_deficit"),
+            pl.col("Unit_Average_Cost").first().alias("_avg_cost"),
+        ])
+        .with_columns(
+            (pl.min_horizontal(pl.col("_total_surplus"), pl.col("_total_deficit")) * pl.col("_avg_cost")).alias(
+                "Potential_Transfer_Value"
+            )
+        )
+        .select(["Item_Identifier", "Potential_Transfer_Value"])
+    )
+
+    df_loc_bounds = (
+        loc_min.join(loc_max, on="Item_Identifier", how="inner")
+        .join(df_transfer_math, on="Item_Identifier", how="left")
+        .with_columns(
+            (
+                (pl.col("_min_days") < 15)
+                & (pl.col("_max_days") > 180)
+                & (pl.col("Potential_Transfer_Value").fill_null(0.0) >= pl.lit(transfer_hurdle_limit))
+            ).alias("Inter_Branch_Misallocation")
+        )
     )
     df_master = df_master.join(
         df_loc_bounds.select(["Item_Identifier", "Inter_Branch_Misallocation"]),
         on="Item_Identifier",
         how="left",
     ).with_columns(pl.col("Inter_Branch_Misallocation").fill_null(False))
+
+    # Transfer math: bloated location surplus and starved location deficit per item.
+    df_master = df_master.with_columns([
+        (pl.col("Quantity_Available").fill_null(0.0).cast(pl.Float64, strict=False)).alias("Quantity_Available"),
+        (pl.col("Target_Stock_Level").fill_null(0.0).cast(pl.Float64, strict=False)).alias("Target_Stock_Level"),
+        (pl.col("Unit_Average_Cost").fill_null(0.0).cast(pl.Float64, strict=False)).alias("Unit_Average_Cost"),
+    ])
+
+    df_starved = (
+        df_master.filter(pl.col("Location_Days_Supply") < 15.0)
+        .with_columns(
+            (pl.col("Target_Stock_Level") - pl.col("Quantity_Available"))
+            .clip(lower_bound=0.0)
+            .cast(pl.Float64, strict=False)
+            .alias("Deficit_Qty")
+        )
+        .group_by("Item_Identifier")
+        .agg(pl.col("Deficit_Qty").sum().cast(pl.Float64, strict=False).alias("Total_Deficit_Qty"))
+    )
+    df_bloated = (
+        df_master.filter(pl.col("Location_Days_Supply") > 180.0)
+        .with_columns(
+            (pl.col("Quantity_Available") - pl.col("Target_Stock_Level"))
+            .clip(lower_bound=0.0)
+            .cast(pl.Float64, strict=False)
+            .alias("Surplus_Qty")
+        )
+        .group_by("Item_Identifier")
+        .agg(pl.col("Surplus_Qty").sum().cast(pl.Float64, strict=False).alias("Total_Surplus_Qty"))
+    )
+    df_transfer_qty = (
+        df_bloated.join(df_starved, on="Item_Identifier", how="inner")
+        .with_columns(
+            pl.min_horizontal(
+                pl.col("Total_Surplus_Qty").fill_null(0.0),
+                pl.col("Total_Deficit_Qty").fill_null(0.0),
+            )
+            .clip(lower_bound=0.0)
+            .cast(pl.Float64, strict=False)
+            .alias("Transfer_Qty")
+        )
+        .select(["Item_Identifier", "Transfer_Qty"])
+    )
+    df_master = df_master.join(df_transfer_qty, on="Item_Identifier", how="left").with_columns(
+        pl.col("Transfer_Qty").fill_null(0.0).cast(pl.Float64, strict=False)
+    )
+    df_master = df_master.with_columns(
+        (pl.col("Transfer_Qty") * pl.col("Unit_Average_Cost"))
+        .cast(pl.Float64, strict=False)
+        .alias("Transfer_Capital_Value")
+    )
 
     total_capital_deployed = float(df_master["Location_Capital_Deployed"].sum() or 0.0)
     sum_location_cogs = float(df_master["Location_Annual_COGS"].sum() or 0.0)
@@ -126,7 +213,12 @@ def calculate_financial_health(
     integrity_qty = int(df_integrity["Quantity_On_Hand"].sum() or 0)
     integrity_item_count = int(df_integrity["Item_Identifier"].n_unique() or 0)
 
-    df_transfer = df_master.filter(pl.col("Inter_Branch_Misallocation"))
+    effective_transfer_threshold = max(float(min_transfer_value_threshold or 0.0), 0.0)
+    df_transfer = df_master.filter(
+        pl.col("Inter_Branch_Misallocation")
+        & (pl.col("Transfer_Capital_Value") >= pl.lit(effective_transfer_threshold, dtype=pl.Float64))
+        & (pl.col("Transfer_Qty") > 0.0)
+    )
     transfer_item_count = (
         int(df_transfer["Item_Identifier"].n_unique()) if not df_transfer.is_empty() else 0
     )

@@ -60,6 +60,22 @@ def ensure_enterprise_ingestion_tables() -> None:
         conn.close()
 
 
+def ensure_transfer_hurdle_column() -> None:
+    """Lightweight migration: ensure dynamic transfer hurdle exists with CFO default."""
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "ALTER TABLE client_ingestion_config "
+            "ADD COLUMN IF NOT EXISTS transfer_hurdle_limit NUMERIC(15, 2) DEFAULT 250.0;"
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def seed_client_ingestion_config_if_absent(client_uuid) -> None:
     """Create a default client_ingestion_config row for new clients (diagnostic-friendly defaults)."""
     ensure_enterprise_ingestion_tables()
@@ -71,12 +87,13 @@ def seed_client_ingestion_config_if_absent(client_uuid) -> None:
             INSERT INTO client_ingestion_config (
                 client_uuid, enabled, sftp_host, sftp_port, sftp_username,
                 sftp_inbound_path, inventory_filename_pattern, annual_sold_filename_pattern, po_filename_pattern,
-                weekly_otb_limit, inventory_column_mapping, annual_sold_column_mapping, po_column_mapping
+                weekly_otb_limit, min_transfer_value_threshold,
+                inventory_column_mapping, annual_sold_column_mapping, po_column_mapping
             )
             VALUES (
                 %s, FALSE, '', 22, 'pending_setup',
                 '/inbound', 'inventory_snapshot', 'annual_sold', 'po_activity',
-                100000.00, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb
+                100000.00, 1000.00, '{}'::jsonb, '{}'::jsonb, '{}'::jsonb
             )
             ON CONFLICT (client_uuid) DO NOTHING
             """,
@@ -91,6 +108,8 @@ def seed_client_ingestion_config_if_absent(client_uuid) -> None:
 def upsert_client_ingestion_erp_settings(
     client_uuid: str,
     weekly_otb_limit: float,
+    transfer_hurdle_limit: float,
+    min_transfer_value_threshold: float,
     inventory_column_mapping: dict,
     annual_sold_column_mapping: dict,
     po_column_mapping: dict,
@@ -99,6 +118,7 @@ def upsert_client_ingestion_erp_settings(
     po_filename_pattern: str,
 ) -> None:
     ensure_enterprise_ingestion_tables()
+    ensure_transfer_hurdle_column()
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
@@ -109,6 +129,8 @@ def upsert_client_ingestion_erp_settings(
                 annual_sold_filename_pattern = %s,
                 po_filename_pattern = %s,
                 weekly_otb_limit = %s,
+                transfer_hurdle_limit = %s,
+                min_transfer_value_threshold = %s,
                 inventory_column_mapping = %s::jsonb,
                 annual_sold_column_mapping = %s::jsonb,
                 po_column_mapping = %s::jsonb,
@@ -120,6 +142,8 @@ def upsert_client_ingestion_erp_settings(
                 annual_sold_filename_pattern.strip() or "annual_sold",
                 po_filename_pattern.strip() or "po_activity",
                 weekly_otb_limit,
+                transfer_hurdle_limit,
+                min_transfer_value_threshold,
                 json.dumps(inventory_column_mapping or {}),
                 json.dumps(annual_sold_column_mapping or {}),
                 json.dumps(po_column_mapping or {}),
@@ -134,7 +158,7 @@ def upsert_client_ingestion_erp_settings(
                     sftp_inbound_path,
                     inventory_filename_pattern, annual_sold_filename_pattern, po_filename_pattern,
                     delete_remote_after_success,
-                    weekly_otb_limit,
+                    weekly_otb_limit, transfer_hurdle_limit, min_transfer_value_threshold,
                     inventory_column_mapping, annual_sold_column_mapping, po_column_mapping,
                     updated_at
                 )
@@ -143,7 +167,7 @@ def upsert_client_ingestion_erp_settings(
                     '/inbound',
                     %s, %s, %s,
                     FALSE,
-                    %s,
+                    %s, %s, %s,
                     %s::jsonb, %s::jsonb, %s::jsonb,
                     CURRENT_TIMESTAMP
                 )
@@ -154,6 +178,8 @@ def upsert_client_ingestion_erp_settings(
                     annual_sold_filename_pattern.strip() or "annual_sold",
                     po_filename_pattern.strip() or "po_activity",
                     weekly_otb_limit,
+                    transfer_hurdle_limit,
+                    min_transfer_value_threshold,
                     json.dumps(inventory_column_mapping or {}),
                     json.dumps(annual_sold_column_mapping or {}),
                     json.dumps(po_column_mapping or {}),
@@ -175,6 +201,7 @@ def fetch_client_ingestion_row(client_uuid: str) -> dict:
             """
             SELECT
                 weekly_otb_limit,
+                min_transfer_value_threshold,
                 inventory_filename_pattern,
                 annual_sold_filename_pattern,
                 po_filename_pattern,

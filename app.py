@@ -262,6 +262,7 @@ def enterprise_ingestion_admin_page():
                 po_filename_pattern,
                 delete_remote_after_success,
                 weekly_otb_limit,
+                min_transfer_value_threshold,
                 max_file_size_mb
             FROM client_ingestion_config
             WHERE client_uuid = %s
@@ -321,7 +322,7 @@ def enterprise_ingestion_admin_page():
             help="Substring match for mandatory 365-day velocity CSV (case-insensitive).",
         )
 
-        col10, col11 = st.columns(2)
+        col10, col11, col12 = st.columns(3)
         weekly_otb_limit = float(
             col10.number_input(
                 "Weekly OTB limit ($)",
@@ -330,7 +331,16 @@ def enterprise_ingestion_admin_page():
                 help="CFO-approved maximum draft PO exposure for a rolling 7-day window.",
             )
         )
-        delete_remote_after_success = col11.checkbox(
+        min_transfer_value_threshold = float(
+            col11.number_input(
+                "Minimum transfer value ($)",
+                value=float(existing.get("min_transfer_value_threshold") or 1000.0),
+                min_value=0.0,
+                step=100.0,
+                help="Suppress low-materiality transfer alerts below this dollar value.",
+            )
+        )
+        delete_remote_after_success = col12.checkbox(
             "Delete remote after success",
             value=bool(existing.get("delete_remote_after_success", False)),
             help="Keep disabled until your workflow is fully validated.",
@@ -363,11 +373,12 @@ def enterprise_ingestion_admin_page():
                             po_filename_pattern,
                             delete_remote_after_success,
                             weekly_otb_limit,
+                            min_transfer_value_threshold,
                             max_file_size_mb,
                             updated_at
                         )
                         VALUES (
-                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+                            %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
                         )
                         ON CONFLICT (client_uuid) DO UPDATE SET
                             enabled = EXCLUDED.enabled,
@@ -383,6 +394,7 @@ def enterprise_ingestion_admin_page():
                             po_filename_pattern = EXCLUDED.po_filename_pattern,
                             delete_remote_after_success = EXCLUDED.delete_remote_after_success,
                             weekly_otb_limit = EXCLUDED.weekly_otb_limit,
+                            min_transfer_value_threshold = EXCLUDED.min_transfer_value_threshold,
                             max_file_size_mb = EXCLUDED.max_file_size_mb,
                             updated_at = CURRENT_TIMESTAMP
                         """,
@@ -400,6 +412,7 @@ def enterprise_ingestion_admin_page():
                             po_pattern.strip() or "po_activity",
                             delete_remote_after_success,
                             weekly_otb_limit,
+                            min_transfer_value_threshold,
                             max_file_size_mb,
                         ),
                     )
@@ -520,6 +533,7 @@ def enterprise_ingestion_admin_page():
                                     result = run_daily_governor(
                                         client_uuid=client_uuid,
                                         weekly_otb_limit=float(weekly_otb_limit),
+                                        min_transfer_value_threshold=float(min_transfer_value_threshold),
                                         company_name=st.session_state["company_name"],
                                     )
                                 out = report_buffer.getvalue()
@@ -580,7 +594,12 @@ def enterprise_ingestion_admin_page():
 
 def erp_integration_settings_page():
     """Persist ERP CSV mappings and Weekly_OTB_Limit to client_ingestion_config for all account tiers."""
-    from engine.erp_config_loader import fetch_ingestion_config, resolve_weekly_otb_limit
+    from engine.erp_config_loader import (
+        fetch_ingestion_config,
+        resolve_min_transfer_value_threshold,
+        resolve_transfer_hurdle_limit,
+        resolve_weekly_otb_limit,
+    )
     from engine.erp_mapping_validation import (
         FLOAT_ANNUAL_SOLD_FIELDS,
         FLOAT_INVENTORY_FIELDS,
@@ -598,11 +617,22 @@ def erp_integration_settings_page():
         "stored mappings and OTB limits still drive the math engine and Manual Execution."
     )
     client_uuid = st.session_state["client_uuid"]
+    auth.ensure_transfer_hurdle_column()
     cfg = fetch_ingestion_config(client_uuid)
     w_raw, used_fallback = resolve_weekly_otb_limit(cfg.get("weekly_otb_limit"))
+    th_raw, th_used_fallback = resolve_transfer_hurdle_limit(cfg.get("transfer_hurdle_limit"))
+    mtv_raw, mtv_used_fallback = resolve_min_transfer_value_threshold(cfg.get("min_transfer_value_threshold"))
     if used_fallback:
         st.warning(
             "Weekly OTB limit was missing or invalid in the database; showing 100000.00 until you save a valid value."
+        )
+    if mtv_used_fallback:
+        st.warning(
+            "Minimum transfer value was missing or invalid in the database; showing 1000.00 until you save a valid value."
+        )
+    if th_used_fallback:
+        st.warning(
+            "Minimum transfer hurdle was missing or invalid in the database; showing 250.00 until you save a valid value."
         )
 
     cpat1, cpat2, cpat3 = st.columns(3)
@@ -623,14 +653,35 @@ def erp_integration_settings_page():
         key="erp_cfg_po_pat",
     )
 
+    col_rule_1, col_rule_2, col_rule_3 = st.columns(3)
     weekly_otb_limit = float(
-        st.number_input(
+        col_rule_1.number_input(
             "Weekly OTB limit ($)",
             value=float(w_raw),
             min_value=0.0,
             step=1000.0,
             help="CFO-approved rolling 7-day draft PO ceiling (stored in client_ingestion_config).",
             key="erp_cfg_weekly_otb",
+        )
+    )
+    transfer_hurdle_limit = float(
+        col_rule_2.number_input(
+            "Minimum transfer hurdle ($)",
+            value=float(th_raw),
+            min_value=0.0,
+            step=50.0,
+            help="CFO-controlled transfer hurdle used by inter-branch misallocation logic.",
+            key="erp_cfg_transfer_hurdle",
+        )
+    )
+    min_transfer_value_threshold = float(
+        col_rule_3.number_input(
+            "Minimum transfer value ($)",
+            value=float(mtv_raw),
+            min_value=0.0,
+            step=100.0,
+            help="Warehouse transfer alert floor. Alerts below this value are suppressed.",
+            key="erp_cfg_min_transfer_value",
         )
     )
 
@@ -773,6 +824,8 @@ def erp_integration_settings_page():
         auth.upsert_client_ingestion_erp_settings(
             client_uuid,
             weekly_otb_limit,
+            transfer_hurdle_limit,
+            min_transfer_value_threshold,
             inv_out,
             as_out,
             po_out,
@@ -797,7 +850,7 @@ def erp_integration_settings_page():
             os.remove(po_path)
 
         st.success(
-            "Mapping configuration and OTB limit saved to client_ingestion_config. "
+            "Mapping configuration, OTB limit, and minimum transfer value saved to client_ingestion_config. "
             "Local inbound CSVs were updated for the next Manual Execution."
         )
 
