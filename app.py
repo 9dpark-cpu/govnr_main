@@ -1042,6 +1042,27 @@ def main_dashboard():
             "Use **Onboarding Settings** to map columns and SFTP patterns; set **Weekly OTB** and "
             "**minimum transfer value** on the Executive Dashboard."
         )
+        with st.expander("Intraday CSV Upload (Manual Override)", expanded=False):
+            inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="man_inv")
+            as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="man_as")
+            po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="man_po")
+            if st.button("Stage Uploaded Files", key="btn_stage_manual_uploads"):
+                if inv_fu is None or as_fu is None:
+                    st.error("Both inventory_snapshot.csv and annual_sold.csv are required to stage files.")
+                else:
+                    inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
+                    os.makedirs(inbound_dir, exist_ok=True)
+                    with open(os.path.join(inbound_dir, "inventory_snapshot.csv"), "wb") as f:
+                        f.write(inv_fu.getbuffer())
+                    with open(os.path.join(inbound_dir, "annual_sold.csv"), "wb") as f:
+                        f.write(as_fu.getbuffer())
+                    po_path = os.path.join(inbound_dir, "po_activity.csv")
+                    if po_fu is not None:
+                        with open(po_path, "wb") as f:
+                            f.write(po_fu.getbuffer())
+                    elif os.path.exists(po_path):
+                        os.remove(po_path)
+                    st.success("Files securely staged for execution.")
         if tier == "diagnostic":
             st.caption(
                 "Diagnostic tier: place files in inbound (or save from Onboarding Settings) and run from here."
@@ -1097,7 +1118,9 @@ def main_dashboard():
 
             if metrics:
                 st.subheader("Run summary (OTB)")
-                col_otb1, col_otb2 = st.columns(2)
+                intercepted = float(metrics.get("intercepted_cash_total", 0.0) or 0.0)
+                suppressed = float(metrics.get("suppressed_cash_total", 0.0) or 0.0)
+                col_otb1, col_otb2, col_otb3, col_otb4 = st.columns(4)
                 col_otb1.metric(
                     "Weekly OTB limit (CFO)",
                     f"${float(metrics.get('weekly_otb_limit', 0)):,.2f}",
@@ -1107,6 +1130,24 @@ def main_dashboard():
                     f"${float(metrics.get('rolling_po_total', 0)):,.2f}",
                     help="Same total as the compliance brief and CFO PDF (anchor = max PO Date_Created).",
                 )
+                col_otb3.metric(
+                    "Capital Intercepted",
+                    f"${intercepted:,.2f}",
+                )
+                col_otb4.metric(
+                    "Opportunity Cost (Suppressed)",
+                    f"${suppressed:,.2f}",
+                )
+
+                is_exception = bool(metrics.get("is_exception_state", False))
+                if is_exception:
+                    st.warning(
+                        "⚠️ Acute Exceptions Detected: In an automated SFTP run, this state triggers immediate Email and SMS dispatch."
+                    )
+                else:
+                    st.success(
+                        "✅ Status Normal: In an automated SFTP run, outward communications would be suppressed to prevent alert fatigue."
+                    )
 
             if st.session_state.get("manual_exec_metrics_saved"):
                 st.success("Financial metrics securely logged to Govnr Vault.")
@@ -1126,17 +1167,44 @@ def main_dashboard():
                     key="manual_exec_dl_govnr_executive_brief_pdf",
                 )
 
-            for file_name, file_bytes in buffers.items():
-                if file_name == pdf_key:
+            acute_names = ("Action_Intercept_Audit_Log.csv", "Report_4_regional_disparity.csv")
+            systemic_names = ("Report_1_Dead_stock.csv", "Report_2_cost_integrity.csv", "Report_3_negative_inventory.csv")
+
+            st.markdown("### 🔴 Immediate Operational Directives")
+            acute_found = False
+            for file_name in acute_names:
+                file_bytes = buffers.get(file_name)
+                if not file_bytes:
                     continue
+                acute_found = True
                 safe_key = "".join(c if c.isalnum() else "_" for c in file_name)
                 st.download_button(
                     label=f"Download {file_name}",
                     data=file_bytes,
                     file_name=file_name,
                     mime="text/csv",
-                    key=f"manual_exec_dl_csv_{safe_key}",
+                    key=f"manual_exec_dl_csv_acute_{safe_key}",
                 )
+            if not acute_found:
+                st.caption("No acute directive reports were triggered in this run.")
+
+            st.markdown("### 🛠️ Systemic Cleanup Projects")
+            systemic_found = False
+            for file_name in systemic_names:
+                file_bytes = buffers.get(file_name)
+                if not file_bytes:
+                    continue
+                systemic_found = True
+                safe_key = "".join(c if c.isalnum() else "_" for c in file_name)
+                st.download_button(
+                    label=f"Download {file_name}",
+                    data=file_bytes,
+                    file_name=file_name,
+                    mime="text/csv",
+                    key=f"manual_exec_dl_csv_systemic_{safe_key}",
+                )
+            if not systemic_found:
+                st.caption("No systemic cleanup project reports were triggered in this run.")
 
         elif st.session_state.get("manual_exec_success") is False and stdout_text is not None:
             st.error(
