@@ -770,6 +770,8 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
 
 
 def main_dashboard():
+    # Binary buffers are never persisted in session state; keep this key clean across reruns.
+    st.session_state.pop("manual_exec_buffers", None)
     st.sidebar.title(f"{st.session_state['company_name']}")
     if st.sidebar.button("Log Out"):
         st.session_state["authenticated"] = False
@@ -780,11 +782,10 @@ def main_dashboard():
     st.sidebar.markdown("---")
     st.sidebar.title("Govnr Navigation")
     def _on_nav_module_change() -> None:
-        """Drop heavy session payload when leaving Manual Execution (avoids frontend white screen)."""
+        """Drop transient manual terminal output when leaving Manual Execution."""
         new = st.session_state.get("govnr_nav_module")
         old = st.session_state.get("_govnr_nav_previous")
         if old == "Manual Execution" and new != "Manual Execution":
-            st.session_state.pop("manual_exec_buffers", None)
             st.session_state.pop("manual_exec_stdout", None)
         st.session_state["_govnr_nav_previous"] = new
 
@@ -1168,18 +1169,18 @@ def main_dashboard():
                 st.error(f"Internal Metrics Logging Error: {st.session_state['manual_exec_save_error']}")
 
             st.subheader("Generated Manual Execution deliverables")
-            if st.button("Dispatch CFO Alerts (Email/SMS)", type="primary", key="btn_manual_dispatch_alerts"):
+            if st.button("🚀 Dispatch CFO Alerts (Email/SMS)", type="primary", key="btn_manual_dispatch_alerts"):
                 from engine.mailer import send_outbound_email, send_outbound_sms
 
                 client_email = auth.fetch_client_contact_email(st.session_state["client_uuid"])
                 acute_attachments = {}
-                _artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
+                db_artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
                 for key in (
                     "Govnr_Executive_Brief.pdf",
                     "Action_Intercept_Audit_Log.csv",
                     "Report_4_warehouse_transfers.csv",
                 ):
-                    payload = _artifacts.get(key)
+                    payload = db_artifacts.get(key)
                     if isinstance(payload, (bytes, bytearray)):
                         acute_attachments[key] = bytes(payload)
 
