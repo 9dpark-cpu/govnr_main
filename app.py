@@ -799,6 +799,10 @@ def main_dashboard():
     elif app_mode == "Executive Dashboard":
         st.title("Executive Financial Dashboard")
         st.write("Historical trends and key performance indicators based on your Govnr syncs.")
+        timeframe = st.selectbox(
+            "Select Timeframe",
+            ["Last 30 Days", "Last Quarter", "Year-to-Date", "All Time"],
+        )
 
         client_uuid_dash = st.session_state["client_uuid"]
         from engine.erp_config_loader import (
@@ -878,20 +882,54 @@ def main_dashboard():
                 "gross_margin_pct",
                 "rolling_po_exposure",
                 "weekly_otb_limit",
+                "intercepted_cash_total",
+                "suppressed_cash_total",
             )
             for col in numeric_cols:
                 if col in df_history.columns:
                     df_history[col] = pd.to_numeric(df_history[col], errors="coerce").astype("float64")
             df_history["date_recorded"] = pd.to_datetime(df_history["date_recorded"])
+            today = pd.Timestamp.today().normalize()
+            df_filtered = df_history.copy()
+            if timeframe == "Last 30 Days":
+                df_filtered = df_filtered[df_filtered["date_recorded"] >= (today - pd.Timedelta(days=30))]
+            elif timeframe == "Last Quarter":
+                df_filtered = df_filtered[df_filtered["date_recorded"] >= (today - pd.Timedelta(days=90))]
+            elif timeframe == "Year-to-Date":
+                df_filtered = df_filtered[df_filtered["date_recorded"] >= pd.Timestamp(year=today.year, month=1, day=1)]
+            if df_filtered.empty:
+                st.info("No records found for the selected timeframe.")
+                df_filtered = df_history.copy()
             # Query returns newest-first; metric cards use row 0. Charts need chronological order.
-            latest = df_history.iloc[0]
+            latest = df_filtered.iloc[0]
             dead_stock_val = float(latest["dead_stock_val"])
             weekly_otb_limit = (
                 0.0
                 if pd.isna(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
                 else float(pd.to_numeric(latest.get("weekly_otb_limit"), errors="coerce"))
             )
-            df_chart_source = df_history.sort_values("date_recorded")
+            total_saved = (
+                float(df_filtered["intercepted_cash_total"].sum())
+                if "intercepted_cash_total" in df_filtered.columns
+                else 0.0
+            )
+            total_suppressed = (
+                float(df_filtered["suppressed_cash_total"].sum())
+                if "suppressed_cash_total" in df_filtered.columns
+                else 0.0
+            )
+            roi_col1, roi_col2 = st.columns(2)
+            roi_col1.metric(
+                "Capital Intercepted (Saved)",
+                f"${total_saved:,.2f}",
+                delta_color="normal",
+            )
+            roi_col2.metric(
+                "Opportunity Cost (Suppressed)",
+                f"${total_suppressed:,.2f}",
+                help="Alerts suppressed due to low materiality or CFO override posture.",
+            )
+            df_chart_source = df_filtered.sort_values("date_recorded")
             st.subheader(f"Latest Snapshot: {latest['date_recorded'].date()}")
 
             col1, col2, col3, col4 = st.columns(4)
@@ -941,10 +979,42 @@ def main_dashboard():
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
                 )
+                acute_names = [f for f in csv_names if f in ("Action_Intercept_Audit_Log.csv", "Report_4_regional_disparity.csv")]
+                systemic_names = [
+                    f
+                    for f in csv_names
+                    if f in (
+                        "Report_1_Dead_stock.csv",
+                        "Report_2_cost_integrity.csv",
+                        "Report_3_negative_inventory.csv",
+                    )
+                ]
                 if not csv_names:
                     st.caption("No CSV hit-lists found in outbound yet. Run the engine to generate reports.")
-                else:
-                    for name in csv_names:
+                st.markdown("### 🔴 Immediate Operational Directives")
+                st.caption(
+                    "Operational directives require immediate action to protect cash flow. These files mirror the acute email alerts."
+                )
+                if not acute_names:
+                    st.caption("No acute operational directive files available.")
+                for name in acute_names:
+                    path = os.path.join(outbound_dir, name)
+                    with open(path, "rb") as fh:
+                        blob = fh.read()
+                    safe_key = "".join(c if c.isalnum() else "_" for c in name)
+                    st.download_button(
+                        label=f"Download {name}",
+                        data=blob,
+                        file_name=name,
+                        mime="text/csv",
+                        key=f"exec_hitlist_acute_{safe_key}",
+                    )
+
+                st.markdown("### 🛠️ Systemic Cleanup Projects")
+                st.caption("Systemic projects are for scheduled data integrity maintenance and do not trigger email alerts.")
+                if not systemic_names:
+                    st.caption("No systemic cleanup project files available.")
+                for name in systemic_names:
                         path = os.path.join(outbound_dir, name)
                         with open(path, "rb") as fh:
                             blob = fh.read()
@@ -954,7 +1024,7 @@ def main_dashboard():
                             data=blob,
                             file_name=name,
                             mime="text/csv",
-                            key=f"exec_hitlist_{safe_key}",
+                            key=f"exec_hitlist_systemic_{safe_key}",
                         )
             else:
                 st.caption("Outbound report directory is not present yet.")
