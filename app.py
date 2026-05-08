@@ -972,62 +972,53 @@ def main_dashboard():
             st.line_chart(df_chart[["gross_margin_pct"]])
 
             st.subheader("Actionable Warehouse Hit-Lists")
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
-            os.makedirs(outbound_dir, exist_ok=True)
-            if os.path.isdir(outbound_dir):
-                csv_names = sorted(
-                    f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
-                )
-                acute_names = [f for f in csv_names if "Action_Intercept_Audit_Log" in f]
-                systemic_names = [
-                    f
-                    for f in csv_names
-                    if f.startswith("Report_1")
-                    or f.startswith("Report_2")
-                    or f.startswith("Report_3")
-                    or f.startswith("Report_4")
-                    or f.startswith("Report_5")
-                ]
-                if not csv_names:
-                    st.caption("No CSV hit-lists found in outbound yet. Run the engine to generate reports.")
-                st.markdown("### 🔴 Immediate Operational Directives")
-                st.caption(
-                    "Operational directives require immediate action to protect cash flow. These files mirror the acute email alerts."
-                )
-                if not acute_names:
-                    st.caption("No acute operational directive files available.")
-                for name in acute_names:
-                    path = os.path.join(outbound_dir, name)
-                    with open(path, "rb") as fh:
-                        blob = fh.read()
-                    safe_key = "".join(c if c.isalnum() else "_" for c in name)
-                    st.download_button(
-                        label=f"Download {name}",
-                        data=blob,
-                        file_name=name,
-                        mime="text/csv",
-                        key=f"exec_hitlist_acute_{safe_key}",
-                    )
+            db_artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
+            artifact_items = sorted(db_artifacts.items(), key=lambda kv: kv[0].lower())
+            if not artifact_items:
+                st.caption("No report artifacts found in PostgreSQL yet. Run the engine to generate reports.")
 
-                st.markdown("### 🛠️ Systemic Cleanup Projects")
-                st.caption("Systemic projects are for scheduled data integrity maintenance and do not trigger email alerts.")
-                if not systemic_names:
-                    st.caption("No systemic cleanup project files available.")
-                for name in systemic_names:
-                        path = os.path.join(outbound_dir, name)
-                        with open(path, "rb") as fh:
-                            blob = fh.read()
-                        safe_key = "".join(c if c.isalnum() else "_" for c in name)
-                        st.download_button(
-                            label=f"Download {name}",
-                            data=blob,
-                            file_name=name,
-                            mime="text/csv",
-                            key=f"exec_hitlist_systemic_{safe_key}",
-                        )
-            else:
-                st.caption("Outbound report directory is not present yet.")
+            st.markdown("### 🔴 Immediate Operational Directives")
+            st.caption(
+                "Operational directives require immediate action to protect cash flow. These files mirror the acute email alerts."
+            )
+            acute_found = False
+            for name, blob in artifact_items:
+                if ("Action_Intercept" not in name) and (not name.startswith("Report_4")):
+                    continue
+                acute_found = True
+                safe_key = "".join(c if c.isalnum() else "_" for c in name)
+                st.download_button(
+                    label=f"Download {name}",
+                    data=blob,
+                    file_name=name,
+                    mime="text/csv",
+                    key=f"exec_hitlist_acute_{safe_key}",
+                )
+            if not acute_found:
+                st.caption("No acute operational directive files available.")
+
+            st.markdown("### 🛠️ Systemic Cleanup Projects")
+            st.caption("Systemic projects are for scheduled data integrity maintenance and do not trigger email alerts.")
+            systemic_found = False
+            for name, blob in artifact_items:
+                if not (
+                    name.startswith("Report_1")
+                    or name.startswith("Report_2")
+                    or name.startswith("Report_3")
+                    or name.startswith("Report_5")
+                ):
+                    continue
+                systemic_found = True
+                safe_key = "".join(c if c.isalnum() else "_" for c in name)
+                st.download_button(
+                    label=f"Download {name}",
+                    data=blob,
+                    file_name=name,
+                    mime="text/csv",
+                    key=f"exec_hitlist_systemic_{safe_key}",
+                )
+            if not systemic_found:
+                st.caption("No systemic cleanup project files available.")
 
     elif app_mode == "Onboarding Settings":
         onboarding_settings_page()

@@ -75,3 +75,15 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
     cursor.execute(
         "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS po_column_mapping JSONB DEFAULT '{}'::jsonb;"
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS client_report_artifacts (
+            id SERIAL PRIMARY KEY,
+            client_uuid UUID REFERENCES clients(client_uuid),
+            report_name VARCHAR(255) NOT NULL,
+            report_data BYTEA NOT NULL,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(client_uuid, report_name)
+        );
+        """
+    )

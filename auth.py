@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import bcrypt
 import psycopg2
+from psycopg2 import Binary
 from psycopg2.extras import RealDictCursor
 import streamlit as st
 import json
@@ -230,6 +231,52 @@ def fetch_client_ingestion_row(client_uuid: str) -> dict:
         if not row:
             return {}
         return dict(row)
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def upsert_report_artifact(client_uuid: str, report_name: str, file_bytes: bytes) -> None:
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO client_report_artifacts (client_uuid, report_name, report_data)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (client_uuid, report_name)
+            DO UPDATE SET
+                report_data = EXCLUDED.report_data,
+                generated_at = CURRENT_TIMESTAMP
+            """,
+            (client_uuid, report_name, Binary(bytes(file_bytes))),
+        )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_latest_report_artifacts(client_uuid: str) -> dict:
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT report_name, report_data, generated_at
+            FROM client_report_artifacts
+            WHERE client_uuid = %s
+            """,
+            (client_uuid,),
+        )
+        rows = cursor.fetchall() or []
+        artifacts = {}
+        for row in rows:
+            payload = row.get("report_data")
+            artifacts[row["report_name"]] = bytes(payload) if payload is not None else b""
+        return artifacts
     finally:
         cursor.close()
         conn.close()

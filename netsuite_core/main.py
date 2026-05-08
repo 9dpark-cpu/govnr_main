@@ -224,6 +224,11 @@ def run_daily_governor(
         weekly_otb_limit=float(wlim),
         min_transfer_value_threshold=float(mtv),
     )
+    for filename, payload in generated_buffers.items():
+        try:
+            auth.upsert_report_artifact(client_uuid, filename, payload)
+        except Exception as e:
+            print(f"[Govnr] Failed to persist artifact {filename} to DB: {e}")
     _persist_audit_csvs_to_outbound(generated_buffers)
 
     df_inv_health = enrich_inventory_health(df_inv_raw)
