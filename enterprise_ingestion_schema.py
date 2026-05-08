@@ -44,6 +44,12 @@ def apply_enterprise_ingestion_schema(cursor) -> None:
     cursor.execute(
         "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS min_transfer_value_threshold NUMERIC(15, 2) DEFAULT 1000.00;"
     )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS toxic_po_material_threshold NUMERIC(15, 2) DEFAULT 250.00;"
+    )
+    cursor.execute(
+        "ALTER TABLE client_ingestion_config ADD COLUMN IF NOT EXISTS enforce_supersession BOOLEAN DEFAULT TRUE;"
+    )
     cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_cash;")
     cursor.execute("ALTER TABLE client_ingestion_config DROP COLUMN IF EXISTS proxy_ap;")
     cursor.execute(

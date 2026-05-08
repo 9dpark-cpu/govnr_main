@@ -57,6 +57,8 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
             SELECT
                 weekly_otb_limit,
                 min_transfer_value_threshold,
+                toxic_po_material_threshold,
+                enforce_supersession,
                 inventory_filename_pattern,
                 annual_sold_filename_pattern,
                 po_filename_pattern,
@@ -80,6 +82,8 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
             return {
                 "weekly_otb_limit": None,
                 "min_transfer_value_threshold": None,
+                "toxic_po_material_threshold": None,
+                "enforce_supersession": True,
                 "inventory_filename_pattern": "inventory_snapshot",
                 "annual_sold_filename_pattern": "annual_sold",
                 "po_filename_pattern": "po_activity",
@@ -108,6 +112,8 @@ def fetch_ingestion_config(client_uuid: str) -> dict[str, Any]:
         return {
             "weekly_otb_limit": row.get("weekly_otb_limit"),
             "min_transfer_value_threshold": row.get("min_transfer_value_threshold"),
+            "toxic_po_material_threshold": row.get("toxic_po_material_threshold"),
+            "enforce_supersession": row.get("enforce_supersession"),
             "inventory_filename_pattern": row.get("inventory_filename_pattern") or "inventory_snapshot",
             "annual_sold_filename_pattern": row.get("annual_sold_filename_pattern") or "annual_sold",
             "po_filename_pattern": row.get("po_filename_pattern") or "po_activity",
@@ -148,3 +154,41 @@ def resolve_min_transfer_value_threshold(raw: Optional[Any]) -> tuple[float, boo
         return v, False
     except (TypeError, ValueError):
         return 1000.0, True
+
+
+def resolve_toxic_po_material_threshold(raw: Optional[Any]) -> tuple[float, bool]:
+    """
+    Returns (threshold, used_fallback). Invalid or missing -> 250.0 and fallback True.
+    """
+    import math
+
+    try:
+        v = float(raw)
+        if math.isnan(v) or v < 0:
+            return 250.0, True
+        return v, False
+    except (TypeError, ValueError):
+        return 250.0, True
+
+
+def resolve_enforce_supersession(raw: Optional[Any]) -> bool:
+    """
+    Returns enforce_supersession with safe casting. Missing/invalid -> True.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(int(raw))
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in {"true", "1", "yes", "y", "on"}:
+            return True
+        if value in {"false", "0", "no", "n", "off"}:
+            return False
+        return True
+    if raw is None:
+        return True
+    try:
+        return bool(raw)
+    except Exception:
+        return True

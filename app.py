@@ -807,6 +807,8 @@ def main_dashboard():
         client_uuid_dash = st.session_state["client_uuid"]
         from engine.erp_config_loader import (
             fetch_ingestion_config,
+            resolve_enforce_supersession,
+            resolve_toxic_po_material_threshold,
             resolve_min_transfer_value_threshold,
             resolve_weekly_otb_limit,
         )
@@ -814,6 +816,8 @@ def main_dashboard():
         _cfg_dash = fetch_ingestion_config(client_uuid_dash)
         _w_show, _ = resolve_weekly_otb_limit(_cfg_dash.get("weekly_otb_limit"))
         _m_show, _ = resolve_min_transfer_value_threshold(_cfg_dash.get("min_transfer_value_threshold"))
+        toxic_raw, _ = resolve_toxic_po_material_threshold(_cfg_dash.get("toxic_po_material_threshold"))
+        super_raw = resolve_enforce_supersession(_cfg_dash.get("enforce_supersession"))
 
         st.subheader("CFO limits")
         st.caption(
@@ -821,7 +825,7 @@ def main_dashboard():
             "Update here anytime without re-uploading CSV samples."
         )
         with st.form("exec_dashboard_cfo_limits"):
-            fc1, fc2 = st.columns(2)
+            fc1, fc2, fc3, fc4 = st.columns(4)
             cfo_weekly_otb = fc1.number_input(
                 "Weekly OTB limit ($)",
                 min_value=0.0,
@@ -838,11 +842,27 @@ def main_dashboard():
                 help="Floor for inter-branch misallocation detection and transfer alerts.",
                 key="dash_cfo_min_transfer",
             )
+            toxic_po_material_threshold = fc3.number_input(
+                "Toxic PO Materiality ($)",
+                min_value=0.0,
+                step=50.0,
+                value=float(toxic_raw),
+                help="Minimum dollar value to trigger a PO intercept alert (e.g. ignores $5 dead stock POs).",
+                key="dash_toxic_po_materiality",
+            )
+            enforce_supersession = fc4.checkbox(
+                "Enforce Supersession Blocks",
+                value=bool(super_raw),
+                help="If True, halts POs for new parts when legacy superseded parts are in stock.",
+                key="dash_enforce_supersession",
+            )
             if st.form_submit_button("Save CFO limits"):
-                auth.save_client_ingestion_financial_limits(
+                auth.upsert_client_ingestion_erp_settings(
                     client_uuid_dash,
                     float(cfo_weekly_otb),
                     float(cfo_min_transfer),
+                    float(toxic_po_material_threshold),
+                    bool(enforce_supersession),
                 )
                 st.success("CFO limits saved. The next engine run will use these values.")
 
@@ -1136,6 +1156,28 @@ def main_dashboard():
                 st.error(f"Internal Metrics Logging Error: {st.session_state['manual_exec_save_error']}")
 
             st.subheader("Generated Manual Execution deliverables")
+            if st.button("Dispatch CFO Alerts (Email/SMS)", type="primary", key="btn_manual_dispatch_alerts"):
+                from engine.mailer import send_outbound_email, send_outbound_sms
+
+                client_email = auth.fetch_client_contact_email(st.session_state["client_uuid"])
+                acute_attachments = {}
+                for key in (
+                    "Govnr_Executive_Brief.pdf",
+                    "Action_Intercept_Audit_Log.csv",
+                    "Report_4_warehouse_transfers.csv",
+                ):
+                    payload = st.session_state["manual_exec_buffers"].get(key)
+                    if isinstance(payload, (bytes, bytearray)):
+                        acute_attachments[key] = bytes(payload)
+
+                send_outbound_email(
+                    recipient_email=client_email,
+                    subject="Govnr Manual Dispatch: Strategic Brief",
+                    body_text="Manual execution complete. Review acute directives attached.",
+                    attachments=acute_attachments,
+                )
+                send_outbound_sms("+15555555555", "Govnr Manual Run complete. Check email for acute PO intercepts.")
+                st.success("Alerts successfully dispatched to CFO and Operations.")
 
             st.markdown("### 🔴 Immediate Operational Directives")
             acute_found = False

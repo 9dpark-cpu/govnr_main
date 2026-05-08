@@ -133,6 +133,72 @@ def save_client_ingestion_financial_limits(
         conn.close()
 
 
+def upsert_client_ingestion_erp_settings(
+    client_uuid: str,
+    weekly_otb_limit: float,
+    min_transfer_value_threshold: float,
+    toxic_po_material_threshold: float,
+    enforce_supersession: bool,
+) -> None:
+    """Persist CFO/ERP control knobs only. Does not touch SFTP fields or column mappings."""
+    ensure_enterprise_ingestion_tables()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE client_ingestion_config SET
+                weekly_otb_limit = %s,
+                min_transfer_value_threshold = %s,
+                toxic_po_material_threshold = %s,
+                enforce_supersession = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE client_uuid = %s
+            """,
+            (
+                float(weekly_otb_limit),
+                float(min_transfer_value_threshold),
+                float(toxic_po_material_threshold),
+                bool(enforce_supersession),
+                client_uuid,
+            ),
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                """
+                INSERT INTO client_ingestion_config (
+                    client_uuid, enabled, sftp_host, sftp_port, sftp_username,
+                    sftp_inbound_path,
+                    inventory_filename_pattern, annual_sold_filename_pattern, po_filename_pattern,
+                    delete_remote_after_success,
+                    weekly_otb_limit, min_transfer_value_threshold, toxic_po_material_threshold, enforce_supersession,
+                    inventory_column_mapping, annual_sold_column_mapping, po_column_mapping,
+                    updated_at
+                )
+                VALUES (
+                    %s, FALSE, '', 22, 'pending_setup',
+                    '/inbound',
+                    'inventory_snapshot', 'annual_sold', 'po_activity',
+                    FALSE,
+                    %s, %s, %s, %s,
+                    '{}'::jsonb, '{}'::jsonb, '{}'::jsonb,
+                    CURRENT_TIMESTAMP
+                )
+                """,
+                (
+                    client_uuid,
+                    float(weekly_otb_limit),
+                    float(min_transfer_value_threshold),
+                    float(toxic_po_material_threshold),
+                    bool(enforce_supersession),
+                ),
+            )
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def upsert_client_ingestion_column_mappings(
     client_uuid: str,
     inventory_filename_pattern: str,
@@ -343,6 +409,27 @@ def login_client(email: str, password: str):
         return False, "Invalid email or password."
     finally:
         conn.close()
+
+
+def fetch_client_contact_email(client_uuid: str) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT contact_email
+            FROM clients
+            WHERE client_uuid = %s
+            LIMIT 1
+            """,
+            (client_uuid,),
+        )
+        row = cursor.fetchone()
+        return (row.get("contact_email") or "").strip() if row else ""
+    finally:
+        cursor.close()
+        conn.close()
+
 
 def save_column_mapping(client_uuid: str, mapping_dict: dict):
     conn = get_db_connection()

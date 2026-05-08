@@ -107,6 +107,7 @@ def enrich_inventory_health(df_inv: pl.DataFrame) -> pl.DataFrame:
 def audit_purchase_orders(
     df_inv_enriched: pl.DataFrame,
     df_po: pl.DataFrame,
+    df_manifest: pl.DataFrame,
     *,
     toxic_po_material_threshold: float = 250.0,
     enforce_supersession: bool = True,
@@ -144,7 +145,15 @@ def audit_purchase_orders(
         pl.col("Item_Description").first().alias("Item_Description"),
     ])
 
+    df_manifest_join = (
+        df_manifest.group_by("Item_Identifier")
+        .agg(pl.col("Transfer_Qty").sum().alias("Transfer_Qty"))
+        if (df_manifest is not None and not df_manifest.is_empty() and "Item_Identifier" in df_manifest.columns)
+        else pl.DataFrame({"Item_Identifier": [], "Transfer_Qty": []})
+    )
+
     df_audit = df_po.join(df_item_net, on="Item_Identifier", how="left")
+    df_audit = df_audit.join(df_manifest_join, on="Item_Identifier", how="left")
     df_audit = df_audit.join(
         df_legacy,
         left_on="Item_Identifier",
@@ -182,6 +191,8 @@ def audit_purchase_orders(
         )
         .when(pl.col("Stock_Status") == "Dead Stock (>365d)")
         .then(pl.lit("CANCEL LINE: Dead Stock (NPI)"))
+        .when(pl.col("Transfer_Qty").fill_null(0.0) > 0)
+        .then(pl.lit("CANCEL LINE: Internal Transfer Available"))
         .when(
             (pl.col("Net_Qty").fill_null(0.0) + pl.col("Quantity_Ordered").fill_null(0.0) - pl.col("Net_Committed").fill_null(0.0))
             > pl.col("Global_Target_Stock_Level").fill_null(0.0)
@@ -216,6 +227,7 @@ def audit_purchase_orders(
 
 if __name__ == "__main__":
     from engine.netsuite_parser import ingest_inventory_snapshot, ingest_po_activity
+    from engine.logic_advanced_erp import calculate_abc_and_gmroi, generate_transfer_manifest
 
     print("\n--- GOVNR LOGIC ENGINE EXECUTION ---")
 
@@ -223,7 +235,9 @@ if __name__ == "__main__":
     df_po_raw = ingest_po_activity(client_uuid="client_test_001")
 
     df_inv_health = enrich_inventory_health(df_inv_raw)
-    df_po_alerts = audit_purchase_orders(df_inv_health, df_po_raw)
+    df_advanced = calculate_abc_and_gmroi(df_inv_health)
+    df_manifest = generate_transfer_manifest(df_advanced)
+    df_po_alerts = audit_purchase_orders(df_inv_health, df_po_raw, df_manifest)
 
     display_cols = [
         "PO_Number",
