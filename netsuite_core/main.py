@@ -218,7 +218,7 @@ def run_daily_governor(
     df_inv_raw = df_inv_raw.join(df_as, on=["Item_Identifier", "Item_Location"], how="left")
     df_inv_raw = df_inv_raw.with_columns(pl.col("Annual_Sold").fill_null(0.0))
 
-    generated_buffers = calculate_financial_health(
+    generated_buffers, advanced_counts = calculate_financial_health(
         df_inv_raw,
         df_po_raw,
         weekly_otb_limit=float(wlim),
@@ -227,13 +227,34 @@ def run_daily_governor(
     _persist_audit_csvs_to_outbound(generated_buffers)
 
     df_inv_health = enrich_inventory_health(df_inv_raw)
-    df_po_alerts = audit_purchase_orders(df_inv_health, df_po_raw)
+    df_po_alerts = audit_purchase_orders(
+        df_inv_health,
+        df_po_raw,
+        toxic_po_material_threshold=250.0,
+        enforce_supersession=True,
+    )
+    df_intercepts = df_po_alerts.filter(pl.col("Governor_Action") != " APPROVED")
+    if not df_intercepts.is_empty():
+        generated_buffers["Action_Intercept_Audit_Log.csv"] = df_intercepts.write_csv().encode("utf-8")
+    df_intercepts_amounts = df_intercepts.with_columns(
+        pl.col("Order_Total_Amount").cast(pl.Float64, strict=False).fill_null(0.0).alias("Order_Total_Amount")
+    )
+    intercepted_cash_total = float(
+        df_intercepts_amounts.filter(~pl.col("Governor_Action").str.starts_with("SUPPRESSED"))["Order_Total_Amount"].sum()
+        or 0.0
+    )
+    suppressed_cash_total = float(
+        df_intercepts_amounts.filter(pl.col("Governor_Action").str.starts_with("SUPPRESSED"))["Order_Total_Amount"].sum()
+        or 0.0
+    )
 
     df_advanced = calculate_abc_and_gmroi(df_inv_health)
     df_manifest = generate_transfer_manifest(df_advanced)
     tax_writeoff = generate_tax_mitigation_plan(df_inv_health)
 
     financials = calculate_working_capital(df_po_raw, weekly_otb_limit=float(wlim))
+    otb_breach_amount = float(financials["Total_Draft_PO_Amount"]) if financials["Cash_Collision_Warning"] else 0.0
+    otb_breach_count = 1 if financials["Cash_Collision_Warning"] else 0
 
     ops = _operating_kpis_from_inventory_same_as_engine(df_inv_raw)
     df_alert_dead_stock = _dead_stock_alert_dataframe_from_buffers(generated_buffers)
@@ -261,6 +282,12 @@ def run_daily_governor(
             dead_stock_value=float(true_dead_stock_sum),
             rolling_po_exposure=float(metrics["rolling_po_total"]),
             weekly_otb_ceiling=float(metrics["weekly_otb_limit"]),
+            intercepted_cash_total=float(intercepted_cash_total),
+            suppressed_cash_total=float(suppressed_cash_total),
+            otb_breach_count=int(otb_breach_count),
+            otb_breach_amount=float(otb_breach_amount),
+            cost_integrity_items=int(advanced_counts["cost_integrity_items"]),
+            transfer_imbalance_items=int(advanced_counts["transfer_imbalance_items"]),
         )
     except Exception as e:
         metrics_save_error = str(e)

@@ -285,4 +285,4 @@ def calculate_financial_health(
     )
     buffers["Govnr_Executive_Brief.pdf"] = pdf_buffer.getvalue()
 
-    return buffers
+    return buffers, {"cost_integrity_items": integrity_item_count, "transfer_imbalance_items": transfer_item_count}

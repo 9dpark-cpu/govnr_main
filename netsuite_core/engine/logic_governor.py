@@ -104,7 +104,13 @@ def enrich_inventory_health(df_inv: pl.DataFrame) -> pl.DataFrame:
     return df_inv
 
 
-def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) -> pl.DataFrame:
+def audit_purchase_orders(
+    df_inv_enriched: pl.DataFrame,
+    df_po: pl.DataFrame,
+    *,
+    toxic_po_material_threshold: float = 250.0,
+    enforce_supersession: bool = True,
+) -> pl.DataFrame:
     """
     Cross-references pending PO lines against inventory and supersession rules.
     """
@@ -182,6 +188,22 @@ def audit_purchase_orders(df_inv_enriched: pl.DataFrame, df_po: pl.DataFrame) ->
         )
         .then(pl.lit(" REDUCE QTY: Exceeds Target Stock"))
         .otherwise(pl.lit(" APPROVED"))
+        .alias("Governor_Action")
+    )
+    df_audit = df_audit.with_columns(
+        pl.when(pl.col("Governor_Action") == " APPROVED")
+        .then(pl.lit(" APPROVED"))
+        .when(
+            pl.col("Order_Total_Amount").cast(pl.Float64, strict=False).fill_null(0.0)
+            < pl.lit(float(toxic_po_material_threshold), dtype=pl.Float64)
+        )
+        .then(pl.lit("SUPPRESSED: Under Material Threshold"))
+        .when(
+            pl.col("Governor_Action").str.contains("Replacement Item Alert")
+            & pl.lit(not enforce_supersession)
+        )
+        .then(pl.lit("SUPPRESSED: Supersession Advisory Only"))
+        .otherwise(pl.col("Governor_Action"))
         .alias("Governor_Action")
     )
 
