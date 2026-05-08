@@ -1031,6 +1031,18 @@ def main_dashboard():
                 st.caption("No systemic cleanup project files available.")
 
     elif app_mode == "Onboarding Settings":
+        for _k in (
+            "manual_exec_buffers",
+            "manual_exec_metrics",
+            "manual_exec_stdout",
+            "manual_exec_success",
+            "manual_exec_metrics_saved",
+            "manual_exec_save_error",
+            "man_inv",
+            "man_as",
+            "man_po",
+        ):
+            st.session_state.pop(_k, None)
         onboarding_settings_page()
 
     elif app_mode == "Manual Execution":
