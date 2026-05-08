@@ -979,15 +979,15 @@ def main_dashboard():
                 csv_names = sorted(
                     f for f in os.listdir(outbound_dir) if f.lower().endswith(".csv") and os.path.isfile(os.path.join(outbound_dir, f))
                 )
-                acute_names = [f for f in csv_names if f in ("Action_Intercept_Audit_Log.csv", "Report_4_regional_disparity.csv")]
+                acute_names = [f for f in csv_names if "Action_Intercept_Audit_Log" in f]
                 systemic_names = [
                     f
                     for f in csv_names
-                    if f in (
-                        "Report_1_Dead_stock.csv",
-                        "Report_2_cost_integrity.csv",
-                        "Report_3_negative_inventory.csv",
-                    )
+                    if f.startswith("Report_1")
+                    or f.startswith("Report_2")
+                    or f.startswith("Report_3")
+                    or f.startswith("Report_4")
+                    or f.startswith("Report_5")
                 ]
                 if not csv_names:
                     st.caption("No CSV hit-lists found in outbound yet. Run the engine to generate reports.")
@@ -1167,8 +1167,16 @@ def main_dashboard():
                     key="manual_exec_dl_govnr_executive_brief_pdf",
                 )
 
-            acute_names = ("Action_Intercept_Audit_Log.csv", "Report_4_regional_disparity.csv")
-            systemic_names = ("Report_1_Dead_stock.csv", "Report_2_cost_integrity.csv", "Report_3_negative_inventory.csv")
+            acute_names = tuple(name for name in buffers.keys() if "Action_Intercept_Audit_Log" in name)
+            systemic_names = tuple(
+                name
+                for name in buffers.keys()
+                if name.startswith("Report_1")
+                or name.startswith("Report_2")
+                or name.startswith("Report_3")
+                or name.startswith("Report_4")
+                or name.startswith("Report_5")
+            )
 
             st.markdown("### 🔴 Immediate Operational Directives")
             acute_found = False

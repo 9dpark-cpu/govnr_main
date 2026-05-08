@@ -362,7 +362,6 @@ def process_client_config(cfg: ClientConfig):
             for key in (
                 "Govnr_Executive_Brief.pdf",
                 "Action_Intercept_Audit_Log.csv",
-                "Report_4_regional_disparity.csv",
             ):
                 payload = buffers.get(key)
                 if isinstance(payload, (bytes, bytearray)):

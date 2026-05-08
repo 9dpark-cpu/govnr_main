@@ -45,19 +45,12 @@ def generate_audit_csv_buffers(
             df_out = flatten_list_columns_to_utf8_for_csv(df)
             buffers[filename] = df_out.write_csv().encode("utf-8")
 
-    if not df_transfer.is_empty() or not df_cost_variance.is_empty():
-        parts_r4 = []
-        if not df_transfer.is_empty():
-            parts_r4.append(
-                df_transfer.with_columns(pl.lit("Warehouse Transfer Alert").alias("Alert_Type"))
-            )
-        if not df_cost_variance.is_empty():
-            parts_r4.append(
-                df_cost_variance.with_columns(pl.lit("Interbranch Cost Difference").alias("Alert_Type"))
-            )
-        df_r4 = pl.concat(parts_r4, how="diagonal")
-        df_r4 = flatten_list_columns_to_utf8_for_csv(df_r4)
-        buffers["Report_4_regional_disparity.csv"] = df_r4.write_csv().encode("utf-8")
+    if not df_transfer.is_empty():
+        df_r4 = flatten_list_columns_to_utf8_for_csv(df_transfer)
+        buffers["Report_4_warehouse_transfers.csv"] = df_r4.write_csv().encode("utf-8")
+    if not df_cost_variance.is_empty():
+        df_r5 = flatten_list_columns_to_utf8_for_csv(df_cost_variance)
+        buffers["Report_5_interbranch_cost_variance.csv"] = df_r5.write_csv().encode("utf-8")
 
     return buffers
 
