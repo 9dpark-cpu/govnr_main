@@ -269,6 +269,12 @@ def run_daily_governor(
         "rolling_po_exposure": draft_roll,
         "rolling_po_total": draft_roll,
         "weekly_otb_limit": weekly_lim,
+        "intercepted_cash_total": float(intercepted_cash_total),
+        "suppressed_cash_total": float(suppressed_cash_total),
+        "otb_breach_count": int(otb_breach_count),
+        "otb_breach_amount": float(otb_breach_amount),
+        "cost_integrity_items": int(advanced_counts.get("cost_integrity_items", 0)),
+        "transfer_imbalance_items": int(advanced_counts.get("transfer_imbalance_items", 0)),
     }
     tier = run_tier if run_tier is not None else "diagnostic"
     metrics_save_error: str | None = None
@@ -351,6 +357,13 @@ def run_daily_governor(
         )
 
     print("=" * 75 + "\n")
+
+    is_exception_state = bool(
+        metrics.get("otb_breach_count", 0) > 0
+        or metrics.get("intercepted_cash_total", 0.0) > 0
+        or advanced_counts.get("transfer_imbalance_items", 0) > 0
+    )
+    metrics["is_exception_state"] = is_exception_state
 
     return {
         "buffers": generated_buffers,

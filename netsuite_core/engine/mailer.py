@@ -94,3 +94,7 @@ def send_outbound_email(
             pass
         server.login(user, password)
         server.send_message(msg)
+
+
+def send_outbound_sms(phone_number: str, text_message: str) -> None:
+    print(f"[SMS DISPATCHED to {phone_number}]: {text_message}")

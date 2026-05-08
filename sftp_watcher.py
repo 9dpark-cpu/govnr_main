@@ -19,6 +19,7 @@ if NETSUITE_DIR not in sys.path:
     sys.path.insert(0, NETSUITE_DIR)
 
 from enterprise_ingestion_schema import apply_enterprise_ingestion_schema
+from engine.mailer import send_outbound_email, send_outbound_sms
 from main import run_daily_governor
 
 
@@ -107,6 +108,28 @@ def fetch_enabled_configs():
                 )
             )
         return configs
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_client_contact_email(client_uuid: str) -> Optional[str]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT contact_email
+            FROM clients
+            WHERE client_uuid = %s
+            LIMIT 1
+            """,
+            (client_uuid,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return (row.get("contact_email") or "").strip() or None
     finally:
         cursor.close()
         conn.close()
@@ -329,6 +352,54 @@ def process_client_config(cfg: ClientConfig):
             )
             print(f"[{cfg.client_uuid}] Engine run failed after download.")
             return
+
+        metrics = pipeline_result.get("metrics", {})
+        buffers = pipeline_result.get("buffers", {})
+        if not metrics.get("is_exception_state"):
+            print(f"[{cfg.client_uuid}] No acute exceptions detected. Suppressing outbound alerts.")
+        else:
+            acute_attachments = {}
+            for key in (
+                "Govnr_Executive_Brief.pdf",
+                "Action_Intercept_Audit_Log.csv",
+                "Report_4_regional_disparity.csv",
+            ):
+                payload = buffers.get(key)
+                if isinstance(payload, (bytes, bytearray)):
+                    acute_attachments[key] = bytes(payload)
+
+            recipient_email = (
+                get_client_contact_email(cfg.client_uuid)
+                or os.getenv("GOVNR_FALLBACK_RECIPIENT_EMAIL", "").strip()
+                or "ops@getgovnr.com"
+            )
+            subject = f"Govnr Exception Alert - {cfg.client_uuid}"
+            body_text = (
+                "Govnr detected an exception state requiring review.\n\n"
+                f"OTB Breach Count: {int(metrics.get('otb_breach_count', 0) or 0)}\n"
+                f"Intercepted Cash: ${float(metrics.get('intercepted_cash_total', 0.0) or 0.0):,.2f}\n"
+                f"Transfer Imbalance Items: {int(metrics.get('transfer_imbalance_items', 0) or 0)}\n"
+                "Please review the attached executive brief and intervention logs."
+            )
+            try:
+                send_outbound_email(
+                    recipient_email=recipient_email,
+                    subject=subject,
+                    body_text=body_text,
+                    attachments=acute_attachments,
+                )
+                print(f"[{cfg.client_uuid}] Exception outbound email dispatched to {recipient_email}.")
+            except Exception as mail_err:
+                print(f"[{cfg.client_uuid}] Outbound email dispatch failed (continuing loop): {mail_err}")
+
+            sms_summary = (
+                "Govnr alert: cash interception or OTB breach detected. Review your exception report email for "
+                "urgent PO intervention details."
+            )[:160]
+            try:
+                send_outbound_sms("+15555555555", sms_summary)
+            except Exception as sms_err:
+                print(f"[{cfg.client_uuid}] Outbound SMS dispatch failed (continuing loop): {sms_err}")
 
         # Mark success using inventory hash as the primary idempotency signal.
         log_ingestion_run(cfg.client_uuid, inv_file, inv_hash, "success")
