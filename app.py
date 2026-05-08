@@ -1043,7 +1043,11 @@ def main_dashboard():
             "man_po",
         ):
             st.session_state.pop(_k, None)
-        onboarding_settings_page()
+        try:
+            onboarding_settings_page()
+        except Exception as e:
+            st.error("Onboarding Settings failed to render. Captured exception:")
+            st.exception(e)
 
     elif app_mode == "Manual Execution":
         st.title("Manual Execution")
