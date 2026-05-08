@@ -20,7 +20,7 @@ from engine.erp_config_loader import (
     resolve_weekly_otb_limit,
 )
 from engine.financial_math import calculate_financial_health
-from engine.polars_list_compat import coerce_scalar_string_columns
+from engine.polars_list_compat import coerce_scalar_string_columns, flatten_list_columns_to_utf8_for_csv
 from engine.govnr_exceptions import MissingFileError, SchemaDriftError
 from engine.ip_harvester import harvest_proprietary_metrics
 from engine.logic_advanced_erp import (
@@ -235,7 +235,8 @@ def run_daily_governor(
     )
     df_intercepts = df_po_alerts.filter(pl.col("Governor_Action") != " APPROVED")
     if not df_intercepts.is_empty():
-        generated_buffers["Action_Intercept_Audit_Log.csv"] = df_intercepts.write_csv().encode("utf-8")
+        df_intercepts_csv = flatten_list_columns_to_utf8_for_csv(df_intercepts)
+        generated_buffers["Action_Intercept_Audit_Log.csv"] = df_intercepts_csv.write_csv().encode("utf-8")
     df_intercepts_amounts = df_intercepts.with_columns(
         pl.col("Order_Total_Amount").cast(pl.Float64, strict=False).fill_null(0.0).alias("Order_Total_Amount")
     )
@@ -309,7 +310,10 @@ def run_daily_governor(
         df_action_needed = df_po_alerts.filter(pl.col("Governor_Action") != " APPROVED")
         if df_action_needed.height > 0:
             cols = ["PO_Number", "Item_Identifier", "Order_Total_Amount", "Governor_Action"]
-            print(df_action_needed.select([c for c in cols if c in df_action_needed.columns]).write_csv())
+            df_action_display = flatten_list_columns_to_utf8_for_csv(
+                df_action_needed.select([c for c in cols if c in df_action_needed.columns])
+            )
+            print(df_action_display.write_csv())
             print("\n Recommendation: Resolve flagged lines before releasing cash.")
         else:
             print("  All pending PO lines passed automated governor checks.")
