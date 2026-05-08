@@ -360,8 +360,8 @@ def process_client_config(cfg: ClientConfig):
         else:
             acute_attachments = {}
             for key in (
-                "Govnr_Executive_Brief.pdf",
                 "Action_Intercept_Audit_Log.csv",
+                "Report_4_warehouse_transfers.csv",
             ):
                 payload = buffers.get(key)
                 if isinstance(payload, (bytes, bytearray)):
@@ -378,7 +378,7 @@ def process_client_config(cfg: ClientConfig):
                 f"OTB Breach Count: {int(metrics.get('otb_breach_count', 0) or 0)}\n"
                 f"Intercepted Cash: ${float(metrics.get('intercepted_cash_total', 0.0) or 0.0):,.2f}\n"
                 f"Transfer Imbalance Items: {int(metrics.get('transfer_imbalance_items', 0) or 0)}\n"
-                "Please review the attached executive brief and intervention logs."
+                "Please review the attached acute CSV hit-lists (PO intercepts and transfer alerts)."
             )
             try:
                 send_outbound_email(

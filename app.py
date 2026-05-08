@@ -598,22 +598,60 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
         "SFTP filename patterns are configured in the other tab. CFO limits are on the Executive Dashboard."
     )
     st.markdown("---")
+    inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
+    inv_disk_path = os.path.join(inbound_dir, "inventory_snapshot.csv")
+    as_disk_path = os.path.join(inbound_dir, "annual_sold.csv")
+    po_disk_path = os.path.join(inbound_dir, "po_activity.csv")
+
     with st.form("mapping_upload_form", clear_on_submit=True):
         st.subheader("Sample files for mapping (pre-flight validation only)")
         inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="erp_fu_inv")
         as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="erp_fu_as")
         po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="erp_fu_po")
-
         if inv_fu is None or as_fu is None:
-            st.info("Upload **inventory** and **annual_sold** sample exports to configure column mappings.")
-            return
+            st.info("Upload **inventory** and **annual_sold** sample exports, then click the button below.")
+        submitted = st.form_submit_button("Upload & Validate Mappings", type="primary")
 
-        cfg = fetch_ingestion_config(client_uuid)
-        raw_inv = pl.read_csv(inv_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-        raw_as = pl.read_csv(as_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-        raw_po = (
-            pl.read_csv(po_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"]) if po_fu is not None else None
-        )
+    if submitted:
+        if inv_fu is None or as_fu is None:
+            st.error("Both inventory_snapshot and annual_sold CSVs are required to validate.")
+        else:
+            os.makedirs(inbound_dir, exist_ok=True)
+            with open(inv_disk_path, "wb") as f:
+                f.write(inv_fu.getbuffer())
+            with open(as_disk_path, "wb") as f:
+                f.write(as_fu.getbuffer())
+            if po_fu is not None:
+                with open(po_disk_path, "wb") as f:
+                    f.write(po_fu.getbuffer())
+            elif os.path.exists(po_disk_path):
+                os.remove(po_disk_path)
+            try:
+                pl.read_csv(inv_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+                pl.read_csv(as_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+                if os.path.exists(po_disk_path):
+                    pl.read_csv(po_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+                st.session_state["erp_mapping_files_ready"] = True
+                st.success("Files staged and validated. Configure mappings below, then save.")
+            except Exception as e:
+                st.session_state["erp_mapping_files_ready"] = False
+                st.error(f"CSV validation failed: {e}")
+
+    files_ready = bool(st.session_state.get("erp_mapping_files_ready")) and os.path.isfile(inv_disk_path) and os.path.isfile(
+        as_disk_path
+    )
+    if not files_ready:
+        st.info("Stage inventory and annual_sold CSVs above to enable column mapping.")
+        return
+
+    cfg = fetch_ingestion_config(client_uuid)
+    raw_inv = pl.read_csv(inv_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+    raw_as = pl.read_csv(as_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+    raw_po = (
+        pl.read_csv(po_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+        if os.path.isfile(po_disk_path)
+        else None
+    )
 
     inv_fields = {
         "Item_Identifier": "Item Name/Number",
@@ -654,45 +692,47 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
     inv_opts = [SELECT_TOKEN] + list(raw_inv.columns)
     as_opts = [SELECT_TOKEN] + list(raw_as.columns)
 
-    st.subheader("Inventory column mapping")
-    inv_map_ui = {}
-    cols_inv = st.columns(2)
-    for i, (gk, hint) in enumerate(inv_fields.items()):
-        idx = get_best_match_index(gk, hint, raw_inv.columns, saved_inv)
-        inv_map_ui[gk] = cols_inv[i % 2].selectbox(
-            gk,
-            options=inv_opts,
-            index=idx,
-            key=f"erp_map_inv_{gk}",
-        )
-
-    st.subheader("Annual sold column mapping")
-    as_map_ui = {}
-    cols_as = st.columns(3)
-    for i, (gk, hint) in enumerate(as_fields.items()):
-        idx = get_best_match_index(gk, hint, raw_as.columns, saved_as)
-        as_map_ui[gk] = cols_as[i % 3].selectbox(
-            gk,
-            options=as_opts,
-            index=idx,
-            key=f"erp_map_as_{gk}",
-        )
-
-    po_map_ui = {}
-    if raw_po is not None:
-        st.subheader("Purchase order column mapping")
-        po_opts = [SELECT_TOKEN] + list(raw_po.columns)
-        cols_po = st.columns(2)
-        for i, (gk, hint) in enumerate(po_fields.items()):
-            idx = get_best_match_index(gk, hint, raw_po.columns, saved_po)
-            po_map_ui[gk] = cols_po[i % 2].selectbox(
+    with st.form("mapping_save_form"):
+        st.subheader("Inventory column mapping")
+        inv_map_ui = {}
+        cols_inv = st.columns(2)
+        for i, (gk, hint) in enumerate(inv_fields.items()):
+            idx = get_best_match_index(gk, hint, raw_inv.columns, saved_inv)
+            inv_map_ui[gk] = cols_inv[i % 2].selectbox(
                 gk,
-                options=po_opts,
+                options=inv_opts,
                 index=idx,
-                key=f"erp_map_po_{gk}",
+                key=f"erp_map_inv_{gk}",
             )
 
+        st.subheader("Annual sold column mapping")
+        as_map_ui = {}
+        cols_as = st.columns(3)
+        for i, (gk, hint) in enumerate(as_fields.items()):
+            idx = get_best_match_index(gk, hint, raw_as.columns, saved_as)
+            as_map_ui[gk] = cols_as[i % 3].selectbox(
+                gk,
+                options=as_opts,
+                index=idx,
+                key=f"erp_map_as_{gk}",
+            )
+
+        po_map_ui = {}
+        if raw_po is not None:
+            st.subheader("Purchase order column mapping")
+            po_opts = [SELECT_TOKEN] + list(raw_po.columns)
+            cols_po = st.columns(2)
+            for i, (gk, hint) in enumerate(po_fields.items()):
+                idx = get_best_match_index(gk, hint, raw_po.columns, saved_po)
+                po_map_ui[gk] = cols_po[i % 2].selectbox(
+                    gk,
+                    options=po_opts,
+                    index=idx,
+                    key=f"erp_map_po_{gk}",
+                )
+
         save_mapping_submitted = st.form_submit_button("Save Mapping Configuration", type="primary")
+
     if save_mapping_submitted:
 
         def internal_dup(mapping: dict, label: str) -> list[str]:
@@ -750,24 +790,9 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
             po_out,
         )
 
-        inbound_dir = os.path.join(NETSUITE_DIR, "data", "inbound")
-        os.makedirs(inbound_dir, exist_ok=True)
-        inv_path = os.path.join(inbound_dir, "inventory_snapshot.csv")
-        as_path = os.path.join(inbound_dir, "annual_sold.csv")
-        po_path = os.path.join(inbound_dir, "po_activity.csv")
-        with open(inv_path, "wb") as f:
-            f.write(inv_fu.getbuffer())
-        with open(as_path, "wb") as f:
-            f.write(as_fu.getbuffer())
-        if po_fu is not None:
-            with open(po_path, "wb") as f:
-                f.write(po_fu.getbuffer())
-        elif os.path.exists(po_path):
-            os.remove(po_path)
-
         st.success(
             "Column mappings and filename patterns saved to client_ingestion_config. "
-            "Local inbound CSVs were updated for the next Manual Execution."
+            "Staged inbound CSVs remain in netsuite_core/data/inbound for Manual Execution."
         )
 
 
@@ -936,7 +961,7 @@ def main_dashboard():
             if df_filtered.empty:
                 st.info("No records found for the selected timeframe.")
                 df_filtered = df_history.copy()
-            # Query returns newest-first; metric cards use row 0. Charts need chronological order.
+            # Query returns newest-first; metric cards use row 0.
             latest = df_filtered.iloc[0]
             dead_stock_val = float(latest["dead_stock_val"])
             weekly_otb_limit = (
@@ -965,7 +990,6 @@ def main_dashboard():
                 f"${total_suppressed:,.2f}",
                 help="Alerts suppressed due to low materiality or CFO override posture.",
             )
-            df_chart_source = df_filtered.sort_values("date_recorded")
             st.subheader(f"Latest Snapshot: {latest['date_recorded'].date()}")
 
             col1, col2, col3, col4 = st.columns(4)
@@ -993,58 +1017,82 @@ def main_dashboard():
                 )
 
             st.markdown("---")
-            df_chart = df_chart_source.set_index("date_recorded")[list(numeric_cols[:4])].astype("float64")
-            colA, colB = st.columns(2)
+            st.markdown("### Historical Execution Ledger")
+            st.caption("Daily tracking of capital, intercepted cash, and systemic decay.")
 
-            with colA:
-                st.subheader("Capital vs. Dead Stock")
-                st.line_chart(df_chart[["total_capital_deployed", "dead_stock_val"]])
+            display_cols = [
+                "date_recorded",
+                "total_capital_deployed",
+                "dead_stock_val",
+                "rolling_po_exposure",
+                "weekly_otb_limit",
+                "intercepted_cash_total",
+                "suppressed_cash_total",
+            ]
+            df_display = df_filtered.copy()
+            valid_cols = [c for c in display_cols if c in df_display.columns]
+            st.dataframe(
+                df_display[valid_cols].sort_values("date_recorded", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-            with colB:
-                st.subheader("Turnover Efficiency")
-                st.line_chart(df_chart[["inventory_turnover"]])
-
-            st.subheader("Gross Margin %")
-            st.line_chart(df_chart[["gross_margin_pct"]])
-
-            st.subheader("Actionable Warehouse Hit-Lists")
+            st.markdown("---")
             db_artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
             if not db_artifacts:
                 st.caption("No report artifacts found in PostgreSQL yet. Run the engine to generate reports.")
 
-            st.markdown("### 🔴 Immediate Operational Directives")
-            st.caption(
-                "Operational directives require immediate action to protect cash flow. These files mirror the acute email alerts."
-            )
-            acute_found = False
-            for filename, payload in db_artifacts.items():
-                if "Action_Intercept" in filename or "Govnr_Executive_Brief" in filename:
-                    acute_found = True
-                    st.download_button(
-                        label=f"Download {filename}",
-                        data=payload,
-                        file_name=filename,
-                        mime="text/csv" if filename.endswith(".csv") else "application/pdf",
-                        key=f"exec_acute_{filename}",
-                    )
-            if not acute_found:
-                st.caption("No acute operational directive files available.")
+            col_acute, col_chronic, col_monthly = st.columns(3)
+            with col_acute:
+                st.markdown("### Alert Intercepts")
+                st.caption("Daily acute PO blocks & urgent transfers.")
+                acute_any = False
+                for filename, payload in db_artifacts.items():
+                    if ("Action_Intercept" in filename) or ("Report_4" in filename):
+                        acute_any = True
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=payload,
+                            file_name=filename,
+                            mime="text/csv" if filename.endswith(".csv") else "application/pdf",
+                            key=f"exec_pillar_acute_{filename}",
+                        )
+                if not acute_any:
+                    st.caption("No alert intercept files available.")
 
-            st.markdown("### 🛠️ Systemic Cleanup Projects")
-            st.caption("Systemic projects are for scheduled data integrity maintenance and do not trigger email alerts.")
-            systemic_found = False
-            for filename, payload in db_artifacts.items():
-                if filename.startswith("Report_"):
-                    systemic_found = True
-                    st.download_button(
-                        label=f"Download {filename}",
-                        data=payload,
-                        file_name=filename,
-                        mime="text/csv",
-                        key=f"exec_systemic_{filename}",
-                    )
-            if not systemic_found:
-                st.caption("No systemic cleanup project files available.")
+            with col_chronic:
+                st.markdown("### Systemic Cleanup")
+                st.caption("Chronic data decay requiring ledger audits.")
+                chronic_any = False
+                for filename, payload in db_artifacts.items():
+                    if filename.startswith("Report_") and ("Report_4" not in filename):
+                        chronic_any = True
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=payload,
+                            file_name=filename,
+                            mime="text/csv",
+                            key=f"exec_pillar_chronic_{filename}",
+                        )
+                if not chronic_any:
+                    st.caption("No systemic cleanup files available.")
+
+            with col_monthly:
+                st.markdown("### Executive Brief")
+                st.caption("Monthly boardroom PDF summary.")
+                brief_any = False
+                for filename, payload in db_artifacts.items():
+                    if "Govnr_Executive_Brief" in filename:
+                        brief_any = True
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=payload,
+                            file_name=filename,
+                            mime="text/csv" if filename.endswith(".csv") else "application/pdf",
+                            key=f"exec_pillar_brief_{filename}",
+                        )
+                if not brief_any:
+                    st.caption("No executive brief available.")
 
     elif app_mode == "Onboarding Settings":
         onboarding_settings_page()
@@ -1180,7 +1228,6 @@ def main_dashboard():
                 acute_attachments = {}
                 db_artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
                 for key in (
-                    "Govnr_Executive_Brief.pdf",
                     "Action_Intercept_Audit_Log.csv",
                     "Report_4_warehouse_transfers.csv",
                 ):
@@ -1190,8 +1237,8 @@ def main_dashboard():
 
                 send_outbound_email(
                     recipient_email=client_email,
-                    subject="Govnr Manual Dispatch: Strategic Brief",
-                    body_text="Manual execution complete. Review acute directives attached.",
+                    subject="Govnr Manual Dispatch: Acute CSV Hit-Lists",
+                    body_text="Manual execution complete. Review the attached intercept and transfer CSV reports.",
                     attachments=acute_attachments,
                 )
                 send_outbound_sms("+15555555555", "Govnr Manual Run complete. Check email for acute PO intercepts.")
