@@ -37,6 +37,12 @@ def init_db():
             dead_stock_val NUMERIC(15, 2),
             obsolete_stock_val NUMERIC(15, 2),
             cash_balance NUMERIC(15, 2),
+            intercepted_cash_total NUMERIC(15, 2) DEFAULT 0.0,
+            suppressed_cash_total NUMERIC(15, 2) DEFAULT 0.0,
+            otb_breach_count INTEGER DEFAULT 0,
+            otb_breach_amount NUMERIC(15, 2) DEFAULT 0.0,
+            cost_integrity_items INTEGER DEFAULT 0,
+            transfer_imbalance_items INTEGER DEFAULT 0,
             run_tier VARCHAR(50) DEFAULT 'diagnostic',
             confidence_tier VARCHAR(50) DEFAULT 'Tier A',
             UNIQUE(client_uuid, date_recorded)

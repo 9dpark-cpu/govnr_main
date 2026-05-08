@@ -350,6 +350,24 @@ def ensure_client_metrics_otb_columns() -> None:
         cursor.execute(
             "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS weekly_otb_limit NUMERIC(15, 2);"
         )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS intercepted_cash_total NUMERIC(15, 2) DEFAULT 0.0;"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS suppressed_cash_total NUMERIC(15, 2) DEFAULT 0.0;"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS otb_breach_count INTEGER DEFAULT 0;"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS otb_breach_amount NUMERIC(15, 2) DEFAULT 0.0;"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS cost_integrity_items INTEGER DEFAULT 0;"
+        )
+        cursor.execute(
+            "ALTER TABLE client_metrics_history ADD COLUMN IF NOT EXISTS transfer_imbalance_items INTEGER DEFAULT 0;"
+        )
         conn.commit()
     finally:
         cursor.close()
@@ -367,6 +385,12 @@ def save_cfo_metrics(
     dead_stock_value: float,
     rolling_po_exposure: float,
     weekly_otb_ceiling: float,
+    intercepted_cash_total: float,
+    suppressed_cash_total: float,
+    otb_breach_count: int,
+    otb_breach_amount: float,
+    cost_integrity_items: int,
+    transfer_imbalance_items: int,
 ):
     ensure_client_metrics_otb_columns()
     conn = get_db_connection()
@@ -376,8 +400,9 @@ def save_cfo_metrics(
         cursor.execute("""
             INSERT INTO client_metrics_history 
             (client_uuid, date_recorded, run_tier, total_capital_deployed, dead_stock_val, inventory_turnover,
-             gross_margin_pct, confidence_tier, rolling_po_exposure, weekly_otb_limit)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             gross_margin_pct, confidence_tier, rolling_po_exposure, weekly_otb_limit, intercepted_cash_total,
+             suppressed_cash_total, otb_breach_count, otb_breach_amount, cost_integrity_items, transfer_imbalance_items)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (client_uuid, date_recorded)
             DO UPDATE SET
                 run_tier = EXCLUDED.run_tier,
@@ -387,7 +412,13 @@ def save_cfo_metrics(
                 confidence_tier = EXCLUDED.confidence_tier,
                 dead_stock_val = EXCLUDED.dead_stock_val,
                 rolling_po_exposure = EXCLUDED.rolling_po_exposure,
-                weekly_otb_limit = EXCLUDED.weekly_otb_limit;
+                weekly_otb_limit = EXCLUDED.weekly_otb_limit,
+                intercepted_cash_total = EXCLUDED.intercepted_cash_total,
+                suppressed_cash_total = EXCLUDED.suppressed_cash_total,
+                otb_breach_count = EXCLUDED.otb_breach_count,
+                otb_breach_amount = EXCLUDED.otb_breach_amount,
+                cost_integrity_items = EXCLUDED.cost_integrity_items,
+                transfer_imbalance_items = EXCLUDED.transfer_imbalance_items;
         """, (
             client_uuid,
             today,
@@ -399,6 +430,12 @@ def save_cfo_metrics(
             confidence_tier,
             rolling_po_exposure,
             weekly_otb_ceiling,
+            intercepted_cash_total,
+            suppressed_cash_total,
+            otb_breach_count,
+            otb_breach_amount,
+            cost_integrity_items,
+            transfer_imbalance_items,
         ))
         conn.commit()
     except Exception as e:
