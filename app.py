@@ -598,21 +598,22 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
         "SFTP filename patterns are configured in the other tab. CFO limits are on the Executive Dashboard."
     )
     st.markdown("---")
-    st.subheader("Sample files for mapping (pre-flight validation only)")
-    inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="erp_fu_inv")
-    as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="erp_fu_as")
-    po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="erp_fu_po")
+    with st.form("mapping_upload_form", clear_on_submit=True):
+        st.subheader("Sample files for mapping (pre-flight validation only)")
+        inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="erp_fu_inv")
+        as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="erp_fu_as")
+        po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="erp_fu_po")
 
-    if inv_fu is None or as_fu is None:
-        st.info("Upload **inventory** and **annual_sold** sample exports to configure column mappings.")
-        return
+        if inv_fu is None or as_fu is None:
+            st.info("Upload **inventory** and **annual_sold** sample exports to configure column mappings.")
+            return
 
-    cfg = fetch_ingestion_config(client_uuid)
-    raw_inv = pl.read_csv(inv_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-    raw_as = pl.read_csv(as_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-    raw_po = (
-        pl.read_csv(po_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"]) if po_fu is not None else None
-    )
+        cfg = fetch_ingestion_config(client_uuid)
+        raw_inv = pl.read_csv(inv_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+        raw_as = pl.read_csv(as_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
+        raw_po = (
+            pl.read_csv(po_fu, infer_schema_length=10000, null_values=["", " ", "NA", "null"]) if po_fu is not None else None
+        )
 
     inv_fields = {
         "Item_Identifier": "Item Name/Number",
@@ -691,7 +692,8 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
                 key=f"erp_map_po_{gk}",
             )
 
-    if st.button("Save Mapping Configuration", type="primary", key="erp_save_mappings"):
+        save_mapping_submitted = st.form_submit_button("Save Mapping Configuration", type="primary")
+    if save_mapping_submitted:
 
         def internal_dup(mapping: dict, label: str) -> list[str]:
             seen: dict[str, str] = {}
@@ -1058,10 +1060,12 @@ def main_dashboard():
             "**minimum transfer value** on the Executive Dashboard."
         )
         with st.expander("Intraday CSV Upload (Manual Override)", expanded=False):
-            inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="man_inv")
-            as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="man_as")
-            po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="man_po")
-            if st.button("Stage Uploaded Files", key="btn_stage_manual_uploads"):
+            with st.form("intraday_upload_form", clear_on_submit=True):
+                inv_fu = st.file_uploader("inventory_snapshot.csv (required)", type=["csv"], key="man_inv")
+                as_fu = st.file_uploader("annual_sold.csv (required)", type=["csv"], key="man_as")
+                po_fu = st.file_uploader("po_activity.csv (optional)", type=["csv"], key="man_po")
+                submitted = st.form_submit_button("Stage Uploaded Files")
+            if submitted:
                 if inv_fu is None or as_fu is None:
                     st.error("Both inventory_snapshot.csv and annual_sold.csv are required to stage files.")
                 else:
@@ -1077,7 +1081,7 @@ def main_dashboard():
                             f.write(po_fu.getbuffer())
                     elif os.path.exists(po_path):
                         os.remove(po_path)
-                    st.success("Files securely staged for execution.")
+                    st.success("Files securely staged. Browser memory flushed.")
         if tier == "diagnostic":
             st.caption(
                 "Diagnostic tier: place files in inbound (or save from Onboarding Settings) and run from here."
