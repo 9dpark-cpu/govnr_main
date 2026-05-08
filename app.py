@@ -973,8 +973,7 @@ def main_dashboard():
 
             st.subheader("Actionable Warehouse Hit-Lists")
             db_artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
-            artifact_items = sorted(db_artifacts.items(), key=lambda kv: kv[0].lower())
-            if not artifact_items:
+            if not db_artifacts:
                 st.caption("No report artifacts found in PostgreSQL yet. Run the engine to generate reports.")
 
             st.markdown("### 🔴 Immediate Operational Directives")
@@ -982,41 +981,32 @@ def main_dashboard():
                 "Operational directives require immediate action to protect cash flow. These files mirror the acute email alerts."
             )
             acute_found = False
-            for name, blob in artifact_items:
-                if ("Action_Intercept" not in name) and (not name.startswith("Report_4")):
-                    continue
-                acute_found = True
-                safe_key = "".join(c if c.isalnum() else "_" for c in name)
-                st.download_button(
-                    label=f"Download {name}",
-                    data=blob,
-                    file_name=name,
-                    mime="text/csv",
-                    key=f"exec_hitlist_acute_{safe_key}",
-                )
+            for filename, payload in db_artifacts.items():
+                if "Action_Intercept" in filename or "Govnr_Executive_Brief" in filename:
+                    acute_found = True
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=payload,
+                        file_name=filename,
+                        mime="text/csv" if filename.endswith(".csv") else "application/pdf",
+                        key=f"exec_acute_{filename}",
+                    )
             if not acute_found:
                 st.caption("No acute operational directive files available.")
 
             st.markdown("### 🛠️ Systemic Cleanup Projects")
             st.caption("Systemic projects are for scheduled data integrity maintenance and do not trigger email alerts.")
             systemic_found = False
-            for name, blob in artifact_items:
-                if not (
-                    name.startswith("Report_1")
-                    or name.startswith("Report_2")
-                    or name.startswith("Report_3")
-                    or name.startswith("Report_5")
-                ):
-                    continue
-                systemic_found = True
-                safe_key = "".join(c if c.isalnum() else "_" for c in name)
-                st.download_button(
-                    label=f"Download {name}",
-                    data=blob,
-                    file_name=name,
-                    mime="text/csv",
-                    key=f"exec_hitlist_systemic_{safe_key}",
-                )
+            for filename, payload in db_artifacts.items():
+                if filename.startswith("Report_"):
+                    systemic_found = True
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=payload,
+                        file_name=filename,
+                        mime="text/csv",
+                        key=f"exec_systemic_{filename}",
+                    )
             if not systemic_found:
                 st.caption("No systemic cleanup project files available.")
 
@@ -1147,61 +1137,33 @@ def main_dashboard():
 
             st.subheader("Generated Manual Execution deliverables")
 
-            pdf_key = "Govnr_Executive_Brief.pdf"
-            pdf_bytes = buffers.get(pdf_key)
-            if pdf_bytes:
-                st.download_button(
-                    label="Download CFO Strategic Brief (PDF)",
-                    data=pdf_bytes,
-                    file_name=pdf_key,
-                    mime="application/pdf",
-                    key="manual_exec_dl_govnr_executive_brief_pdf",
-                )
-
-            acute_names = tuple(name for name in buffers.keys() if "Action_Intercept_Audit_Log" in name)
-            systemic_names = tuple(
-                name
-                for name in buffers.keys()
-                if name.startswith("Report_1")
-                or name.startswith("Report_2")
-                or name.startswith("Report_3")
-                or name.startswith("Report_4")
-                or name.startswith("Report_5")
-            )
-
             st.markdown("### 🔴 Immediate Operational Directives")
             acute_found = False
-            for file_name in acute_names:
-                file_bytes = buffers.get(file_name)
-                if not file_bytes:
-                    continue
-                acute_found = True
-                safe_key = "".join(c if c.isalnum() else "_" for c in file_name)
-                st.download_button(
-                    label=f"Download {file_name}",
-                    data=file_bytes,
-                    file_name=file_name,
-                    mime="text/csv",
-                    key=f"manual_exec_dl_csv_acute_{safe_key}",
-                )
+            for filename, payload in buffers.items():
+                if "Action_Intercept" in filename or "Govnr_Executive_Brief" in filename:
+                    acute_found = True
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=payload,
+                        file_name=filename,
+                        mime="text/csv" if filename.endswith(".csv") else "application/pdf",
+                        key=f"manual_acute_{filename}",
+                    )
             if not acute_found:
                 st.caption("No acute directive reports were triggered in this run.")
 
             st.markdown("### 🛠️ Systemic Cleanup Projects")
             systemic_found = False
-            for file_name in systemic_names:
-                file_bytes = buffers.get(file_name)
-                if not file_bytes:
-                    continue
-                systemic_found = True
-                safe_key = "".join(c if c.isalnum() else "_" for c in file_name)
-                st.download_button(
-                    label=f"Download {file_name}",
-                    data=file_bytes,
-                    file_name=file_name,
-                    mime="text/csv",
-                    key=f"manual_exec_dl_csv_systemic_{safe_key}",
-                )
+            for filename, payload in buffers.items():
+                if filename.startswith("Report_"):
+                    systemic_found = True
+                    st.download_button(
+                        label=f"Download {filename}",
+                        data=payload,
+                        file_name=filename,
+                        mime="text/csv",
+                        key=f"manual_systemic_{filename}",
+                    )
             if not systemic_found:
                 st.caption("No systemic cleanup project reports were triggered in this run.")
 
