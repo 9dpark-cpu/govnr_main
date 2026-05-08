@@ -779,6 +779,18 @@ def main_dashboard():
         
     st.sidebar.markdown("---")
     st.sidebar.title("Govnr Navigation")
+    def _on_nav_module_change() -> None:
+        """Drop heavy session payload when leaving Manual Execution (avoids frontend white screen)."""
+        new = st.session_state.get("govnr_nav_module")
+        old = st.session_state.get("_govnr_nav_previous")
+        if old == "Manual Execution" and new != "Manual Execution":
+            st.session_state.pop("manual_exec_buffers", None)
+            st.session_state.pop("manual_exec_stdout", None)
+        st.session_state["_govnr_nav_previous"] = new
+
+    if "_govnr_nav_previous" not in st.session_state:
+        st.session_state["_govnr_nav_previous"] = st.session_state.get("govnr_nav_module", "Welcome")
+
     app_mode = st.sidebar.selectbox(
         "Select Module",
         [
@@ -788,6 +800,7 @@ def main_dashboard():
             "Manual Execution",
         ],
         key="govnr_nav_module",
+        on_change=_on_nav_module_change,
     )
 
     if app_mode == "Welcome":
@@ -1031,23 +1044,7 @@ def main_dashboard():
                 st.caption("No systemic cleanup project files available.")
 
     elif app_mode == "Onboarding Settings":
-        for _k in (
-            "manual_exec_buffers",
-            "manual_exec_metrics",
-            "manual_exec_stdout",
-            "manual_exec_success",
-            "manual_exec_metrics_saved",
-            "manual_exec_save_error",
-            "man_inv",
-            "man_as",
-            "man_po",
-        ):
-            st.session_state.pop(_k, None)
-        try:
-            onboarding_settings_page()
-        except Exception as e:
-            st.error("Onboarding Settings failed to render. Captured exception:")
-            st.exception(e)
+        onboarding_settings_page()
 
     elif app_mode == "Manual Execution":
         st.title("Manual Execution")
@@ -1109,11 +1106,10 @@ def main_dashboard():
 
             if result is None:
                 st.session_state["manual_exec_success"] = False
-                st.session_state.pop("manual_exec_buffers", None)
                 st.session_state.pop("manual_exec_metrics", None)
             else:
                 st.session_state["manual_exec_success"] = True
-                st.session_state["manual_exec_buffers"] = result["buffers"]
+                st.session_state.pop("manual_exec_buffers", None)
                 st.session_state["manual_exec_metrics"] = result.get("metrics")
                 err = result.get("metrics_save_error")
                 if err:
@@ -1129,8 +1125,8 @@ def main_dashboard():
             st.subheader("Govnr terminal output")
             st.code(stdout_text, language="markdown")
 
-        if st.session_state.get("manual_exec_success") and st.session_state.get("manual_exec_buffers"):
-            buffers = st.session_state["manual_exec_buffers"]
+        if st.session_state.get("manual_exec_success"):
+            buffers = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
             metrics = st.session_state.get("manual_exec_metrics") or {}
 
             if metrics:
@@ -1177,12 +1173,13 @@ def main_dashboard():
 
                 client_email = auth.fetch_client_contact_email(st.session_state["client_uuid"])
                 acute_attachments = {}
+                _artifacts = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
                 for key in (
                     "Govnr_Executive_Brief.pdf",
                     "Action_Intercept_Audit_Log.csv",
                     "Report_4_warehouse_transfers.csv",
                 ):
-                    payload = st.session_state["manual_exec_buffers"].get(key)
+                    payload = _artifacts.get(key)
                     if isinstance(payload, (bytes, bytearray)):
                         acute_attachments[key] = bytes(payload)
 
@@ -1230,6 +1227,10 @@ def main_dashboard():
                 "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
                 "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
             )
+
+    st.session_state["_govnr_nav_previous"] = app_mode
+
+
 if __name__ == "__main__":
     if st.session_state.get("authenticated", False):
         main_dashboard()
