@@ -45,6 +45,61 @@ def compute_rolling_po_exposure_total(df_po: pl.DataFrame) -> float:
     return float(df_window["Order_Total_Amount"].sum())
 
 
+def rolling_po_orders_in_window(df_po: pl.DataFrame) -> pl.DataFrame:
+    """
+    One row per PO_Number in the same 7-day rolling window as ``compute_rolling_po_exposure_total``.
+    ``Order_Total_Amount`` is de-duplicated per PO (line exports often repeat the PO header amount).
+    """
+    if df_po.is_empty():
+        return pl.DataFrame(
+            schema={
+                "PO_Number": pl.String,
+                "Order_Total_Amount": pl.Float64,
+                "Purchase_Order_Vendor": pl.String,
+                "Order_Status": pl.String,
+            }
+        )
+
+    df_eff = df_po.with_columns(
+        pl.col("Date_Created")
+        .cast(pl.Utf8)
+        .str.slice(0, 10)
+        .str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+        .alias("_eff_date")
+    )
+    anchor_scalar = df_eff.select(pl.col("_eff_date").max()).to_series()[0]
+    if anchor_scalar is None:
+        anchor_date = date.today()
+    else:
+        anchor_date = anchor_scalar
+
+    cutoff = anchor_date - timedelta(days=7)
+    df_window = df_eff.filter(
+        pl.col("_eff_date").is_not_null()
+        & (pl.col("_eff_date") >= pl.lit(cutoff))
+        & pl.col("Order_Status").is_in(list(_OTB_ROLLING_STATUSES))
+    )
+    if df_window.is_empty():
+        return pl.DataFrame(
+            schema={
+                "PO_Number": pl.String,
+                "Order_Total_Amount": pl.Float64,
+                "Purchase_Order_Vendor": pl.String,
+                "Order_Status": pl.String,
+            }
+        )
+
+    return (
+        df_window.group_by("PO_Number")
+        .agg(
+            pl.col("Order_Total_Amount").max().alias("Order_Total_Amount"),
+            pl.col("Purchase_Order_Vendor").first().alias("Purchase_Order_Vendor"),
+            pl.col("Order_Status").first().alias("Order_Status"),
+        )
+        .sort("Order_Total_Amount", descending=True)
+    )
+
+
 def calculate_working_capital(
     df_pending_pos: pl.DataFrame,
     weekly_otb_limit: float = 100_000.00,

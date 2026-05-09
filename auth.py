@@ -460,7 +460,10 @@ def get_client_metrics_history(client_uuid: str) -> list:
             """
             SELECT date_recorded, total_capital_deployed, dead_stock_val,
                    inventory_turnover, gross_margin_pct, avg_gmroi,
-                   rolling_po_exposure, weekly_otb_limit
+                   rolling_po_exposure, weekly_otb_limit,
+                   intercepted_cash_total, suppressed_cash_total,
+                   otb_breach_count, otb_breach_amount,
+                   cost_integrity_items, transfer_imbalance_items
             FROM client_metrics_history
             WHERE client_uuid = %s
             ORDER BY date_recorded DESC NULLS LAST
