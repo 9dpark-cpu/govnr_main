@@ -58,6 +58,7 @@ def login_page():
                     st.session_state["account_tier"] = result.get("account_tier", "diagnostic")
                     st.session_state["inventory_column_mapping"] = result.get("inventory_column_mapping") or {}
                     st.session_state["inbound_email_prefix"] = result.get("inbound_email_prefix", "client")
+                    st.session_state["govnr_nav_module"] = "Executive Dashboard"
                     st.rerun()
                 else:
                     st.error(result)
@@ -818,40 +819,40 @@ def main_dashboard():
         st.session_state["_govnr_nav_previous"] = new
 
     if "_govnr_nav_previous" not in st.session_state:
-        st.session_state["_govnr_nav_previous"] = st.session_state.get("govnr_nav_module", "Welcome")
+        st.session_state["_govnr_nav_previous"] = st.session_state.get(
+            "govnr_nav_module", "Executive Dashboard"
+        )
+
+    _nav_modules = ("Executive Dashboard", "Onboarding Settings", "Manual Execution")
+    if st.session_state.get("govnr_nav_module") not in _nav_modules:
+        st.session_state["govnr_nav_module"] = "Executive Dashboard"
 
     app_mode = st.sidebar.selectbox(
         "Select Module",
-        [
-            "Welcome",
-            "Executive Dashboard",
-            "Onboarding Settings",
-            "Manual Execution",
-        ],
+        list(_nav_modules),
         key="govnr_nav_module",
         on_change=_on_nav_module_change,
     )
 
-    if app_mode == "Welcome":
-        st.title("Govnr: Strategic Compliance Brief")
-        st.success("Authentication Verified. Secure connection established.")
-        st.write(f"Welcome, {st.session_state['company_name']}.")
-        st.write("Please select a module from the sidebar to begin.")
+    if app_mode == "Executive Dashboard":
 
-    elif app_mode == "Executive Dashboard":
+        EXEC_DASH_BG = "#fafafa"
 
-        def _exec_command_band(status: str, headline: str, sub: str) -> str:
-            theme = {
-                "green": ("#d1fae5", "#065f46", "#059669"),
-                "yellow": ("#fef9c3", "#854d0e", "#ca8a04"),
-                "red": ("#fee2e2", "#991b1b", "#dc2626"),
-            }
-            bg, fg, accent = theme.get(status, theme["green"])
+        def _exec_callout(status: str, headline: str, sub: str) -> str:
+            """Muted callout strip; dark text. Red uses light-red ground (financial SaaS)."""
+            if status == "red":
+                bg, border, icon = "#fecaca", "#b91c1c", "⚠️"
+            elif status == "yellow":
+                bg, border, icon = "#fde68a", "#d97706", "⚠️"
+            else:
+                bg, border, icon = "#bbf7d0", "#059669", "✓"
+            fg = "#0f172a"
             return (
-                f'<div style="background:{bg};color:{fg};padding:1.35rem 1.75rem;border-radius:12px;'
-                f'border-left:6px solid {accent};margin-bottom:0.5rem;">'
-                f'<div style="font-size:1.2rem;font-weight:650;letter-spacing:-0.02em;">{headline}</div>'
-                f'<div style="margin-top:0.45rem;opacity:0.92;font-size:0.98rem;line-height:1.45;">{sub}</div></div>'
+                f'<div style="background:{bg};color:{fg};padding:1rem 1.25rem;border-radius:10px;'
+                f'border:1px solid {border};line-height:1.45;">'
+                f'<div><span style="font-size:1.15rem;margin-right:0.45rem;">{icon}</span>'
+                f'<strong style="font-size:1rem;">{headline}</strong></div>'
+                f'<div style="margin-top:0.45rem;font-size:0.94rem;">{sub}</div></div>'
             )
 
         def _exec_transfer_df(artifacts: dict) -> pd.DataFrame:
@@ -872,6 +873,61 @@ def main_dashboard():
             if low.endswith(".csv"):
                 return f"{stem[:-4]} (CSV)"
             return base
+
+        st.markdown(
+            f"""
+<style>
+[data-testid="stAppViewContainer"] .main {{
+    background-color: {EXEC_DASH_BG} !important;
+}}
+.main .block-container {{
+    max-width: 1200px !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    padding-left: clamp(16px, 4vw, 32px) !important;
+    padding-right: clamp(16px, 4vw, 32px) !important;
+}}
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section) {{
+    border: 1px solid #334155;
+    background-color: #ffffff;
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 24px !important;
+}}
+p.exec-dash-section {{
+    display: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}}
+section.main h2, section.main h3 {{
+    font-size: 19px !important;
+    font-weight: 600 !important;
+    margin-bottom: 12px !important;
+    color: #0f172a !important;
+}}
+section.main h1 {{
+    font-size: 1.65rem !important;
+    font-weight: 600 !important;
+    margin-bottom: 0.35rem !important;
+    color: #0f172a !important;
+}}
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--metrics) [data-testid="stMetricLabel"] > div {{
+    font-size: 14px !important;
+    font-weight: 700 !important;
+}}
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--metrics) [data-testid="stMetricValue"] > div {{
+    font-size: 24px !important;
+}}
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
+    min-height: 42px !important;
+    border-radius: 8px !important;
+}}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
 
         st.title("Executive Dashboard")
         if st.session_state.pop("exec_governance_applied", False):
@@ -922,17 +978,6 @@ def main_dashboard():
         po_window_pl = rolling_po_orders_in_window(df_po_live) if not df_po_live.is_empty() else None
 
         if not records:
-            st.info(
-                "No historical data found. Run **Manual Execution** (or your scheduled sync) to generate the first snapshot."
-            )
-            st.markdown(
-                _exec_command_band(
-                    "yellow",
-                    "Optimization Required",
-                    "Pulse metrics will populate after the first successful engine run.",
-                ),
-                unsafe_allow_html=True,
-            )
             latest = None
             df_filtered = pd.DataFrame()
             draft_po = 0.0
@@ -940,6 +985,23 @@ def main_dashboard():
             over_otb = False
             xfer_opportunity_count = xfer_n
             t_imb = 0
+            with st.container():
+                st.markdown(
+                    '<p class="exec-dash-section exec-dash-section--status" aria-hidden="true"></p>',
+                    unsafe_allow_html=True,
+                )
+                st.info(
+                    "No historical data found. Run **Manual Execution** (or your scheduled sync) to generate "
+                    "the first snapshot."
+                )
+                st.markdown(
+                    _exec_callout(
+                        "yellow",
+                        "Optimization Required",
+                        "Pulse metrics will populate after the first successful engine run.",
+                    ),
+                    unsafe_allow_html=True,
+                )
         else:
             numeric_cols = (
                 "total_capital_deployed",
@@ -1003,206 +1065,233 @@ def main_dashboard():
                 headline = "All Systems Nominal"
                 sub = "No procurement limit breach. Latest snapshot is within the active ceiling."
 
-            cb_col, rn_col = st.columns([5, 1])
-            with cb_col:
-                st.markdown(_exec_command_band(band, headline, sub), unsafe_allow_html=True)
-            with rn_col:
-                st.markdown('<div style="height:1.6rem"></div>', unsafe_allow_html=True)
-                if over_otb:
-                    if st.button("Resolve Now", type="primary", key="exec_resolve_now"):
-                        st.session_state["exec_open_po_breakdown"] = True
+            with st.container():
+                st.markdown(
+                    '<p class="exec-dash-section exec-dash-section--status" aria-hidden="true"></p>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(_exec_callout(band, headline, sub), unsafe_allow_html=True)
 
-            st.markdown('<div style="height:1.25rem"></div>', unsafe_allow_html=True)
-
-            if weekly_ceiling > 0:
-                pct_use = draft_po / weekly_ceiling * 100.0
-                m1d = f"{pct_use:.1f}%"
-            else:
-                m1d = "—"
-
-            inactive_cap = float(pd.to_numeric(latest.get("dead_stock_val"), errors="coerce") or 0.0)
-            turnover_x = float(pd.to_numeric(latest.get("inventory_turnover"), errors="coerce") or 0.0)
-
-            em1, em2, em3, em4 = st.columns(4)
-            em1.metric(
-                "Weekly procurement (vs. ceiling)",
-                m1d,
-                help="Rolling 7-day draft PO exposure as a share of the weekly procurement ceiling (saved settings).",
-            )
-            em2.metric(
-                "Inactive capital",
-                f"${inactive_cap:,.2f}",
-                help="Capital tied up in non-performing inventory (formerly reported as dead stock).",
-            )
-            em3.metric(
-                "Inventory velocity",
-                f"{turnover_x:.2f}x",
-                help="Inventory turnover consistent with the Govnr engine brief.",
-            )
-            em4.metric(
-                "Pending inter-warehouse transfers",
-                f"{xfer_opportunity_count}",
-                help="Distinct parts with transfer opportunity in the latest Report 4 manifest or metrics.",
-            )
-
-            st.markdown('<div style="height:1.75rem"></div>', unsafe_allow_html=True)
-
-            ch1, ch2, ch3 = st.columns(3)
-            cap_hi = max(weekly_ceiling * 1.15, draft_po * 1.1, 1.0) if weekly_ceiling > 0 else max(draft_po * 1.1, 1.0)
-            ref_line = weekly_ceiling if weekly_ceiling > 0 else 0.0
-            _ind_kw = dict(
-                mode="number+gauge+delta" if ref_line > 0 else "number+gauge",
-                value=draft_po,
-                number={
-                    "prefix": "$",
-                    "valueformat": ",.0f",
-                    "font": {"size": 22, "color": "#0f172a"},
-                },
-                gauge={
-                    "shape": "bullet",
-                    "axis": {
-                        "range": [0, cap_hi],
-                        "tickcolor": "#94a3b8",
-                        "tickwidth": 1,
-                        "tickfont": {"size": 11, "color": "#64748b"},
-                        "showticklabels": True,
-                    },
-                    "threshold": {
-                        "line": {"color": "#0a0a0a", "width": 2},
-                        "thickness": 0.85,
-                        "value": ref_line if ref_line > 0 else cap_hi,
-                    },
-                    "bgcolor": "#e2e8f0",
-                    "bar": {"color": "#1e3a5f"},
-                },
-                title={
-                    "text": "Procurement vs. ceiling",
-                    "font": {"size": 14, "color": "#334155"},
-                },
-            )
-            if ref_line > 0:
-                _ind_kw["delta"] = {
-                    "reference": ref_line,
-                    "valueformat": ",.0f",
-                    "increasing": {"color": "#475569"},
-                    "decreasing": {"color": "#475569"},
-                }
-            fig_bullet = go.Figure(go.Indicator(**_ind_kw))
-            fig_bullet.update_layout(
-                height=240,
-                margin=dict(l=28, r=28, t=56, b=28),
-                paper_bgcolor="#ffffff",
-                plot_bgcolor="#ffffff",
-                font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
-                xaxis=dict(showgrid=False, zeroline=False, visible=False),
-                yaxis=dict(showgrid=False, zeroline=False, visible=False),
-            )
-            with ch1:
-                st.caption("Procurement / ceiling — bullet view")
-                st.plotly_chart(
-                    fig_bullet,
-                    use_container_width=True,
-                    config={"displayModeBar": False},
+            with st.container():
+                st.markdown(
+                    '<p class="exec-dash-section exec-dash-section--metrics" aria-hidden="true"></p>',
+                    unsafe_allow_html=True,
                 )
 
-            dh = df_filtered.sort_values("date_recorded")[["date_recorded", "dead_stock_val"]].copy()
-            dh["month"] = dh["date_recorded"].dt.strftime("%Y-%m")
-            agg_dead = dh.groupby("month", as_index=False).last()
-            fig_dead = go.Figure(
-                data=[
-                    go.Bar(
-                        x=agg_dead["month"],
-                        y=agg_dead["dead_stock_val"],
-                        name="Inactive capital",
-                        marker_color="#6366f1",
+                if weekly_ceiling > 0:
+                    pct_use = draft_po / weekly_ceiling * 100.0
+                    m1d = f"{pct_use:.1f}%"
+                else:
+                    m1d = "—"
+
+                inactive_cap = float(pd.to_numeric(latest.get("dead_stock_val"), errors="coerce") or 0.0)
+                turnover_x = float(pd.to_numeric(latest.get("inventory_turnover"), errors="coerce") or 0.0)
+
+                em1, em2, em3, em4 = st.columns(4)
+                em1.metric(
+                    "Weekly procurement (vs. ceiling)",
+                    m1d,
+                    help="Rolling 7-day draft PO exposure as a share of the weekly procurement ceiling (saved settings).",
+                )
+                em2.metric(
+                    "Inactive capital",
+                    f"${inactive_cap:,.2f}",
+                    help="Capital tied up in non-performing inventory (formerly reported as dead stock).",
+                )
+                em3.metric(
+                    "Inventory velocity",
+                    f"{turnover_x:.2f}x",
+                    help="Inventory turnover consistent with the Govnr engine brief.",
+                )
+                em4.metric(
+                    "Pending inter-warehouse transfers",
+                    f"{xfer_opportunity_count}",
+                    help="Distinct parts with transfer opportunity in the latest Report 4 manifest or metrics.",
+                )
+
+                ch1, ch2, ch3 = st.columns(3)
+                cap_hi = (
+                    max(weekly_ceiling * 1.15, draft_po * 1.1, 1.0)
+                    if weekly_ceiling > 0
+                    else max(draft_po * 1.1, 1.0)
+                )
+                ref_line = weekly_ceiling if weekly_ceiling > 0 else 0.0
+                _ind_kw = dict(
+                    mode="number+gauge+delta" if ref_line > 0 else "number+gauge",
+                    value=draft_po,
+                    number={
+                        "prefix": "$",
+                        "valueformat": ",.0f",
+                        "font": {"size": 22, "color": "#0f172a"},
+                    },
+                    gauge={
+                        "shape": "bullet",
+                        "axis": {
+                            "range": [0, cap_hi],
+                            "tickcolor": "#94a3b8",
+                            "tickwidth": 1,
+                            "tickfont": {"size": 11, "color": "#64748b"},
+                            "showticklabels": True,
+                        },
+                        "threshold": {
+                            "line": {"color": "#0a0a0a", "width": 2},
+                            "thickness": 0.85,
+                            "value": ref_line if ref_line > 0 else cap_hi,
+                        },
+                        "bgcolor": "#e2e8f0",
+                        "bar": {"color": "#1e3a5f"},
+                    },
+                    title={
+                        "text": "Procurement vs. ceiling",
+                        "font": {"size": 14, "color": "#334155"},
+                    },
+                )
+                if ref_line > 0:
+                    _ind_kw["delta"] = {
+                        "reference": ref_line,
+                        "valueformat": ",.0f",
+                        "increasing": {"color": "#475569"},
+                        "decreasing": {"color": "#475569"},
+                    }
+                fig_bullet = go.Figure(go.Indicator(**_ind_kw))
+                fig_bullet.update_layout(
+                    height=240,
+                    margin=dict(l=28, r=28, t=56, b=28),
+                    paper_bgcolor=EXEC_DASH_BG,
+                    plot_bgcolor=EXEC_DASH_BG,
+                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                    xaxis=dict(showgrid=False, zeroline=False, visible=False),
+                    yaxis=dict(showgrid=False, zeroline=False, visible=False),
+                )
+                with ch1:
+                    st.caption("Procurement / ceiling — bullet view")
+                    st.plotly_chart(
+                        fig_bullet,
+                        use_container_width=True,
+                        config={"displayModeBar": False},
                     )
-                ]
-            )
-            fig_dead.update_layout(
-                height=240,
-                margin=dict(l=28, r=28, t=40, b=28),
-                showlegend=False,
-                yaxis_title="USD",
-            )
-            with ch2:
-                st.caption("Inactive capital — month-end trend")
-                st.plotly_chart(fig_dead, use_container_width=True)
 
-            turn_hist = df_filtered.sort_values("date_recorded")
-            fig_spark = go.Figure(
-                go.Scatter(
-                    x=turn_hist["date_recorded"],
-                    y=turn_hist["inventory_turnover"],
-                    mode="lines",
-                    line=dict(width=2.5, color="#0d9488"),
+                dh = df_filtered.sort_values("date_recorded")[["date_recorded", "dead_stock_val"]].copy()
+                dh["month"] = dh["date_recorded"].dt.strftime("%Y-%m")
+                agg_dead = dh.groupby("month", as_index=False).last()
+                fig_dead = go.Figure(
+                    data=[
+                        go.Bar(
+                            x=agg_dead["month"],
+                            y=agg_dead["dead_stock_val"],
+                            name="Inactive capital",
+                            marker_color="#475569",
+                            width=0.4,
+                        )
+                    ]
                 )
-            )
-            fig_spark.update_xaxes(visible=False, showgrid=False)
-            fig_spark.update_yaxes(visible=False, showgrid=False)
-            fig_spark.update_layout(
-                height=120,
-                margin=dict(l=0, r=0, t=8, b=0),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-            )
-            with ch3:
-                st.caption("Inventory velocity — trend sparkline")
-                st.plotly_chart(fig_spark, use_container_width=True)
+                fig_dead.update_layout(
+                    height=240,
+                    margin=dict(l=20, r=20, t=36, b=20),
+                    showlegend=False,
+                    paper_bgcolor=EXEC_DASH_BG,
+                    plot_bgcolor=EXEC_DASH_BG,
+                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                )
+                fig_dead.update_xaxes(
+                    showgrid=False,
+                    zeroline=False,
+                    tickfont=dict(size=11, color="#64748b"),
+                )
+                fig_dead.update_yaxes(
+                    showgrid=False,
+                    zeroline=False,
+                    showticklabels=True,
+                    tickfont=dict(size=11, color="#64748b"),
+                    title_text=None,
+                )
+                with ch2:
+                    st.caption("Inactive capital — month-end trend")
+                    st.plotly_chart(
+                        fig_dead,
+                        use_container_width=True,
+                        config={"displayModeBar": False},
+                    )
 
-        st.markdown('<div style="height:1.5rem"></div>', unsafe_allow_html=True)
+                turn_hist = df_filtered.sort_values("date_recorded")
+                fig_spark = go.Figure(
+                    go.Scatter(
+                        x=turn_hist["date_recorded"],
+                        y=turn_hist["inventory_turnover"],
+                        mode="lines",
+                        line=dict(width=2.5, color="#1e3a5f"),
+                    )
+                )
+                fig_spark.update_xaxes(visible=False, showgrid=False, zeroline=False)
+                fig_spark.update_yaxes(visible=False, showgrid=False, zeroline=False)
+                fig_spark.update_layout(
+                    height=120,
+                    margin=dict(l=8, r=8, t=8, b=8),
+                    plot_bgcolor=EXEC_DASH_BG,
+                    paper_bgcolor=EXEC_DASH_BG,
+                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                )
+                with ch3:
+                    st.caption("Inventory velocity — trend sparkline")
+                    st.plotly_chart(
+                        fig_spark,
+                        use_container_width=True,
+                        config={"displayModeBar": False},
+                    )
 
-        with st.expander("Governance & Alert Thresholds", expanded=False):
-            st.caption(
-                "Values persist in PostgreSQL and apply to the next engine run. "
-                "**Apply Changes** refreshes procurement math on this page immediately."
+        with st.container():
+            st.markdown(
+                '<p class="exec-dash-section exec-dash-section--governance" aria-hidden="true"></p>',
+                unsafe_allow_html=True,
             )
-            with st.form("governance_alert_thresholds"):
-                g1, g2, g3, g4 = st.columns(4)
-                gov_ceiling = g1.number_input(
-                    "Weekly procurement ceiling ($)",
-                    min_value=0.0,
-                    step=1000.0,
-                    value=float(_w_show),
-                    help="Rolling 7-day draft PO limit (formerly weekly OTB).",
-                    key="gov_weekly_procurement_ceiling",
+            with st.expander("Governance & Alert Thresholds", expanded=False):
+                st.caption(
+                    "Values persist in PostgreSQL and apply to the next engine run. "
+                    "**Apply Changes** refreshes procurement math on this page immediately."
                 )
-                gov_min_xfer = g2.number_input(
-                    "Minimum transfer threshold ($)",
-                    min_value=0.0,
-                    step=100.0,
-                    value=float(_m_show),
-                    help="Value floor for inter-warehouse movement alerts.",
-                    key="gov_min_transfer_threshold",
-                )
-                gov_stagnant = g3.number_input(
-                    "Stagnant procurement threshold ($)",
-                    min_value=0.0,
-                    step=50.0,
-                    value=float(toxic_raw),
-                    help="Materiality floor for stagnant / dead-stock PO intercepts (formerly toxic PO).",
-                    key="gov_stagnant_procurement_threshold",
-                )
-                gov_super = g4.checkbox(
-                    "Enforce supersession blocks",
-                    value=bool(super_raw),
-                    help="Block new part POs when superseded legacy stock is available.",
-                    key="gov_enforce_supersession",
-                )
-                submitted_gov = st.form_submit_button("Apply Changes")
-            if submitted_gov:
-                auth.upsert_client_ingestion_erp_settings(
-                    client_uuid_dash,
-                    float(gov_ceiling),
-                    float(gov_min_xfer),
-                    float(gov_stagnant),
-                    bool(gov_super),
-                )
-                st.session_state["exec_governance_applied"] = True
-                st.rerun()
-
-        st.markdown('<div style="height:2rem"></div>', unsafe_allow_html=True)
-        st.subheader("Immediate action queue")
-        st.caption("Decision-ready items only. Noise is filtered to the thresholds above.")
+                with st.form("governance_alert_thresholds"):
+                    g1, g2, g3, g4 = st.columns(4)
+                    gov_ceiling = g1.number_input(
+                        "Weekly procurement ceiling ($)",
+                        min_value=0.0,
+                        step=1000.0,
+                        value=float(_w_show),
+                        help="Rolling 7-day draft PO limit (formerly weekly OTB).",
+                        key="gov_weekly_procurement_ceiling",
+                    )
+                    gov_min_xfer = g2.number_input(
+                        "Minimum transfer threshold ($)",
+                        min_value=0.0,
+                        step=100.0,
+                        value=float(_m_show),
+                        help="Value floor for inter-warehouse movement alerts.",
+                        key="gov_min_transfer_threshold",
+                    )
+                    gov_stagnant = g3.number_input(
+                        "Stagnant procurement threshold ($)",
+                        min_value=0.0,
+                        step=50.0,
+                        value=float(toxic_raw),
+                        help="Materiality floor for stagnant / dead-stock PO intercepts (formerly toxic PO).",
+                        key="gov_stagnant_procurement_threshold",
+                    )
+                    gov_super = g4.checkbox(
+                        "Enforce supersession blocks",
+                        value=bool(super_raw),
+                        help="Block new part POs when superseded legacy stock is available.",
+                        key="gov_enforce_supersession",
+                    )
+                    submitted_gov = st.form_submit_button("Apply Changes")
+                if submitted_gov:
+                    auth.upsert_client_ingestion_erp_settings(
+                        client_uuid_dash,
+                        float(gov_ceiling),
+                        float(gov_min_xfer),
+                        float(gov_stagnant),
+                        bool(gov_super),
+                    )
+                    st.session_state["exec_governance_applied"] = True
+                    st.rerun()
 
         po_breakdown_open = bool(st.session_state.get("exec_open_po_breakdown")) or (
             bool(latest is not None) and over_otb
@@ -1240,118 +1329,140 @@ def main_dashboard():
 
         queue_empty = not show_po_cards and xfer_cards_df.empty
 
-        if over_otb and queue_empty:
-            st.warning(
-                "Procurement limit breach is active on rolling exposure, but there are no PO line cards or "
-                "transfer rows to display. Stage **po_activity.csv** and refresh, or run the engine to repopulate artifacts."
+        with st.container():
+            st.markdown(
+                '<p class="exec-dash-section exec-dash-section--action" aria-hidden="true"></p>',
+                unsafe_allow_html=True,
             )
-        elif queue_empty:
-            st.success("No pending actions—procurement strategy is balanced.")
-        else:
-            if show_po_cards:
-                st.markdown("##### Procurement limit breach — orders")
-                exp_po = st.expander(
-                    "PO exposure breakdown (filtered table)",
-                    expanded=po_breakdown_open,
-                )
-                with exp_po:
-                    if po_window_pl is not None and not po_window_pl.is_empty():
-                        ptab = po_window_pl.to_pandas()
-                        _sty = (
-                            ptab.style.map(
-                                lambda v: "color: #b91c1c; font-weight: 600"
-                                if isinstance(v, (int, float)) and weekly_ceiling > 0 and float(v) > weekly_ceiling
-                                else "",
-                                subset=["Order_Total_Amount"],
-                            )
-                            if "Order_Total_Amount" in ptab.columns
-                            else ptab.style
-                        )
-                        styler = _sty
-                        st.dataframe(styler, use_container_width=True, hide_index=True)
-                    else:
-                        st.caption("Stage **po_activity.csv** to enumerate PO-level exposure.")
+            st.subheader("Immediate action queue")
+            st.caption("Decision-ready items only. Noise is filtered to the thresholds above.")
 
-                st.caption(
-                    "Govnr surfaces alerts only — execute decisions in your ERP or workflow tools."
+            if over_otb and queue_empty:
+                st.warning(
+                    "Procurement limit breach is active on rolling exposure, but there are no PO line cards or "
+                    "transfer rows to display. Stage **po_activity.csv** and refresh, or run the engine to "
+                    "repopulate artifacts."
                 )
-                for _idx, row in enumerate(collision_rows):
-                    po_num = str(row.get("PO_Number", ""))
-                    val = float(row.get("Order_Total_Amount") or 0.0)
-                    vendor = str(row.get("Purchase_Order_Vendor", "") or "—")
-                    with st.container():
+            elif queue_empty:
+                st.markdown(
+                    '<div style="color:#15803d;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:10px;'
+                    'padding:16px 20px;font-size:15px;line-height:1.5;">'
+                    "✅ Procurement strategy is optimized. No action required.</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                if show_po_cards:
+                    st.markdown("### Procurement limit breach — orders")
+                    exp_po = st.expander(
+                        "PO exposure breakdown (filtered table)",
+                        expanded=po_breakdown_open,
+                    )
+                    with exp_po:
+                        if po_window_pl is not None and not po_window_pl.is_empty():
+                            ptab = po_window_pl.to_pandas()
+                            _sty = (
+                                ptab.style.map(
+                                    lambda v: "color: #b91c1c; font-weight: 600"
+                                    if isinstance(v, (int, float)) and weekly_ceiling > 0 and float(v) > weekly_ceiling
+                                    else "",
+                                    subset=["Order_Total_Amount"],
+                                )
+                                if "Order_Total_Amount" in ptab.columns
+                                else ptab.style
+                            )
+                            styler = _sty
+                            st.dataframe(styler, use_container_width=True, hide_index=True)
+                        else:
+                            st.caption("Stage **po_activity.csv** to enumerate PO-level exposure.")
+
+                    st.caption(
+                        "Govnr surfaces alerts only — execute decisions in your ERP or workflow tools."
+                    )
+                    for _idx, row in enumerate(collision_rows):
+                        po_num = str(row.get("PO_Number", ""))
+                        val = float(row.get("Order_Total_Amount") or 0.0)
+                        vendor = str(row.get("Purchase_Order_Vendor", "") or "—")
+                        with st.container():
+                            st.markdown(
+                                f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;'
+                                f'margin:0.75rem 0;background:#fafafa;">'
+                                f"<b>{po_num}</b> &nbsp;|&nbsp; <b>${val:,.2f}</b> &nbsp;|&nbsp; {vendor}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                if not xfer_cards_df.empty:
+                    st.markdown("### Inter-branch opportunities")
+                    for j, xr in xfer_cards_df.head(20).iterrows():
+                        item = str(xr.get("Item_Identifier", ""))
+                        locs = str(xr.get("locations", ""))
+                        tv = float(xr.get("transfer_value") or 0.0)
                         st.markdown(
-                            f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;margin:0.75rem 0;background:#fafafa;">'
-                            f"<b>{po_num}</b> &nbsp;|&nbsp; <b>${val:,.2f}</b> &nbsp;|&nbsp; {vendor}</div>",
+                            f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;'
+                            f'margin:0.75rem 0;background:#f8fafc;">'
+                            f"<b>Part {item}</b><br/>Locations: {locs}<br/><b>Transfer value:</b> ${tv:,.2f}</div>",
                             unsafe_allow_html=True,
                         )
 
-            if not xfer_cards_df.empty:
-                st.markdown("##### Inter-branch opportunities")
-                for j, xr in xfer_cards_df.head(20).iterrows():
-                    item = str(xr.get("Item_Identifier", ""))
-                    locs = str(xr.get("locations", ""))
-                    tv = float(xr.get("transfer_value") or 0.0)
-                    st.markdown(
-                        f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;margin:0.75rem 0;background:#f8fafc;">'
-                        f"<b>Part {item}</b><br/>Locations: {locs}<br/><b>Transfer value:</b> ${tv:,.2f}</div>",
-                        unsafe_allow_html=True,
-                    )
+        with st.container():
+            st.markdown(
+                '<p class="exec-dash-section exec-dash-section--audit" aria-hidden="true"></p>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("Systemic audit — evidence locker", expanded=False):
+                st.caption("Daily operational logs (CSV) and executive briefings (PDF) from the latest engine run.")
+                if not db_artifacts:
+                    st.info("No artifacts in PostgreSQL yet. Run the engine to populate audit tiles.")
 
-        st.markdown('<div style="height:2rem"></div>', unsafe_allow_html=True)
-        with st.expander("Systemic audit — evidence locker", expanded=False):
-            st.caption("Daily operational logs (CSV) and executive briefings (PDF) from the latest engine run.")
-            if not db_artifacts:
-                st.info("No artifacts in PostgreSQL yet. Run the engine to populate audit tiles.")
+                pdf_items = []
+                csv_items = []
+                for fname, payload in sorted((db_artifacts or {}).items()):
+                    low = fname.lower()
+                    if low.endswith(".pdf") or "executive_brief" in low:
+                        pdf_items.append((fname, payload))
+                    elif low.endswith(".csv"):
+                        csv_items.append((fname, payload))
 
-            pdf_items = []
-            csv_items = []
-            for fname, payload in sorted((db_artifacts or {}).items()):
-                low = fname.lower()
-                if low.endswith(".pdf") or "executive_brief" in low:
-                    pdf_items.append((fname, payload))
-                elif low.endswith(".csv"):
-                    csv_items.append((fname, payload))
+                if pdf_items:
+                    st.markdown("**Executive briefings**")
+                    r1, r2, r3 = st.columns(3)
+                    for i, (fname, payload) in enumerate(pdf_items):
+                        col = [r1, r2, r3][i % 3]
+                        with col:
+                            st.markdown(f"### 📄 {_exec_tile_label(fname)}")
+                            st.download_button(
+                                "Download",
+                                data=payload,
+                                file_name=fname,
+                                mime="application/pdf" if fname.lower().endswith(".pdf") else "application/octet-stream",
+                                key=f"audit_pdf_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
+                                use_container_width=True,
+                                type="secondary",
+                            )
 
-            if pdf_items:
-                st.markdown("**Executive briefings**")
-                r1, r2, r3 = st.columns(3)
-                for i, (fname, payload) in enumerate(pdf_items):
-                    col = [r1, r2, r3][i % 3]
-                    with col:
-                        st.markdown(f"##### 📄 {_exec_tile_label(fname)}")
-                        st.download_button(
-                            "Download",
-                            data=payload,
-                            file_name=fname,
-                            mime="application/pdf" if fname.lower().endswith(".pdf") else "application/octet-stream",
-                            key=f"audit_pdf_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
-                            use_container_width=True,
-                        )
+                if csv_items:
+                    st.markdown("**Daily operational logs**")
+                    c1, c2, c3 = st.columns(3)
+                    for i, (fname, payload) in enumerate(csv_items):
+                        col = [c1, c2, c3][i % 3]
+                        with col:
+                            st.markdown(f"### 📊 {_exec_tile_label(fname)}")
+                            st.download_button(
+                                "Download",
+                                data=payload,
+                                file_name=fname,
+                                mime="text/csv",
+                                key=f"audit_csv_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
+                                use_container_width=True,
+                                type="secondary",
+                            )
 
-            if csv_items:
-                st.markdown("**Daily operational logs**")
-                c1, c2, c3 = st.columns(3)
-                for i, (fname, payload) in enumerate(csv_items):
-                    col = [c1, c2, c3][i % 3]
-                    with col:
-                        st.markdown(f"##### 📊 {_exec_tile_label(fname)}")
-                        st.download_button(
-                            "Download",
-                            data=payload,
-                            file_name=fname,
-                            mime="text/csv",
-                            key=f"audit_csv_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
-                            use_container_width=True,
-                        )
-
-        with st.expander("Diagnostics & historical ledger", expanded=False):
-            st.caption("Integrity audit exports and raw metric history for engineering review.")
-            if records:
-                st.dataframe(df_history.head(12), use_container_width=True, hide_index=True)
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
-            st.write(f"Outbound path: `{outbound_dir}` (exists: {os.path.exists(outbound_dir)})")
+            with st.expander("Diagnostics & historical ledger", expanded=False):
+                st.caption("Integrity audit exports and raw metric history for engineering review.")
+                if records:
+                    st.dataframe(df_history.head(12), use_container_width=True, hide_index=True)
+                base_path = os.path.dirname(os.path.abspath(__file__))
+                outbound_dir = os.path.join(base_path, "netsuite_core", "data", "outbound")
+                st.write(f"Outbound path: `{outbound_dir}` (exists: {os.path.exists(outbound_dir)})")
     elif app_mode == "Onboarding Settings":
         onboarding_settings_page()
 
