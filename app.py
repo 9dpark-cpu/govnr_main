@@ -801,6 +801,34 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
 def main_dashboard():
     # Binary buffers are never persisted in session state; keep this key clean across reruns.
     st.session_state.pop("manual_exec_buffers", None)
+    st.markdown(
+        """
+<style>
+[data-testid="stAppViewContainer"] .main {
+    background-color: #F8FAFC !important;
+}
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%) !important;
+    border-right: none !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span:not([data-baseweb="tag"]),
+[data-testid="stSidebar"] label {
+    color: #e2e8f0 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] span {
+    color: #f8fafc !important;
+}
+section.main h1, section.main h2, section.main h3 {
+    color: #1E293B !important;
+}
+section.main [data-testid="stCaption"] {
+    color: #64748B !important;
+}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.sidebar.title(f"{st.session_state['company_name']}")
     if st.sidebar.button("Log Out"):
         st.session_state["authenticated"] = False
@@ -836,23 +864,24 @@ def main_dashboard():
 
     if app_mode == "Executive Dashboard":
 
-        EXEC_DASH_BG = "#fafafa"
+        EXEC_CARD_BG = "#FFFFFF"
 
         def _exec_callout(status: str, headline: str, sub: str) -> str:
-            """Muted callout strip; dark text. Red uses light-red ground (financial SaaS)."""
+            """Soft SaaS callouts; procurement breach uses #FEF2F2 / #991B1B per design spec."""
             if status == "red":
-                bg, border, icon = "#fecaca", "#b91c1c", "⚠️"
+                bg, border, fg, icon = "#FEF2F2", "#FEF2F2", "#991B1B", "⚠️"
             elif status == "yellow":
-                bg, border, icon = "#fde68a", "#d97706", "⚠️"
+                bg, border, fg = "#FFFBEB", "#FEF3C7", "#92400E"
+                icon = "⚠️"
             else:
-                bg, border, icon = "#bbf7d0", "#059669", "✓"
-            fg = "#0f172a"
+                bg, border, fg = "#F0FDF4", "#DCFCE7", "#166534"
+                icon = "✓"
             return (
-                f'<div style="background:{bg};color:{fg};padding:1rem 1.25rem;border-radius:10px;'
-                f'border:1px solid {border};line-height:1.45;">'
-                f'<div><span style="font-size:1.15rem;margin-right:0.45rem;">{icon}</span>'
-                f'<strong style="font-size:1rem;">{headline}</strong></div>'
-                f'<div style="margin-top:0.45rem;font-size:0.94rem;">{sub}</div></div>'
+                f'<div style="width:100%;box-sizing:border-box;background:{bg};color:{fg};padding:14px 18px;'
+                f'border-radius:10px;border:1px solid {border};line-height:1.5;margin-bottom:20px;">'
+                f'<div><span style="font-size:1.05rem;margin-right:0.45rem;">{icon}</span>'
+                f'<strong style="font-size:0.95rem;font-weight:600;">{headline}</strong></div>'
+                f'<div style="margin-top:0.4rem;font-size:0.9rem;opacity:0.95;color:{fg};">{sub}</div></div>'
             )
 
         def _exec_transfer_df(artifacts: dict) -> pd.DataFrame:
@@ -877,22 +906,22 @@ def main_dashboard():
         st.markdown(
             f"""
 <style>
-[data-testid="stAppViewContainer"] .main {{
-    background-color: {EXEC_DASH_BG} !important;
-}}
 .main .block-container {{
     max-width: 1200px !important;
     margin-left: auto !important;
     margin-right: auto !important;
-    padding-left: clamp(16px, 4vw, 32px) !important;
-    padding-right: clamp(16px, 4vw, 32px) !important;
+    padding-left: clamp(16px, 4vw, 40px) !important;
+    padding-right: clamp(16px, 4vw, 40px) !important;
+    padding-top: 1.25rem !important;
+    padding-bottom: 2.5rem !important;
 }}
 div[data-testid="stVerticalBlock"]:has(p.exec-dash-section) {{
-    border: 1px solid #334155;
-    background-color: #ffffff;
-    border-radius: 10px;
-    padding: 24px;
-    margin-bottom: 24px !important;
+    border: none !important;
+    background-color: {EXEC_CARD_BG} !important;
+    border-radius: 12px !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+    padding: 24px !important;
+    margin-bottom: 40px !important;
 }}
 p.exec-dash-section {{
     display: none !important;
@@ -904,21 +933,24 @@ p.exec-dash-section {{
 section.main h2, section.main h3 {{
     font-size: 19px !important;
     font-weight: 600 !important;
-    margin-bottom: 12px !important;
-    color: #0f172a !important;
+    margin-bottom: 14px !important;
 }}
 section.main h1 {{
     font-size: 1.65rem !important;
     font-weight: 600 !important;
     margin-bottom: 0.35rem !important;
-    color: #0f172a !important;
 }}
-div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--metrics) [data-testid="stMetricLabel"] > div {{
-    font-size: 14px !important;
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--pulse) [data-testid="stMetricLabel"] > div {{
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    color: #64748B !important;
+}}
+div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--pulse) [data-testid="stMetricValue"] > div {{
+    font-size: 22px !important;
     font-weight: 700 !important;
-}}
-div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--metrics) [data-testid="stMetricValue"] > div {{
-    font-size: 24px !important;
+    color: #1E293B !important;
 }}
 div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
     min-height: 42px !important;
@@ -987,7 +1019,7 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
             t_imb = 0
             with st.container():
                 st.markdown(
-                    '<p class="exec-dash-section exec-dash-section--status" aria-hidden="true"></p>',
+                    '<p class="exec-dash-section exec-dash-section--pulse" aria-hidden="true"></p>',
                     unsafe_allow_html=True,
                 )
                 st.info(
@@ -1067,16 +1099,10 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
 
             with st.container():
                 st.markdown(
-                    '<p class="exec-dash-section exec-dash-section--status" aria-hidden="true"></p>',
+                    '<p class="exec-dash-section exec-dash-section--pulse" aria-hidden="true"></p>',
                     unsafe_allow_html=True,
                 )
                 st.markdown(_exec_callout(band, headline, sub), unsafe_allow_html=True)
-
-            with st.container():
-                st.markdown(
-                    '<p class="exec-dash-section exec-dash-section--metrics" aria-hidden="true"></p>',
-                    unsafe_allow_html=True,
-                )
 
                 if weekly_ceiling > 0:
                     pct_use = draft_po / weekly_ceiling * 100.0
@@ -1087,27 +1113,40 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                 inactive_cap = float(pd.to_numeric(latest.get("dead_stock_val"), errors="coerce") or 0.0)
                 turnover_x = float(pd.to_numeric(latest.get("inventory_turnover"), errors="coerce") or 0.0)
 
-                em1, em2, em3, em4 = st.columns(4)
-                em1.metric(
-                    "Weekly procurement (vs. ceiling)",
-                    m1d,
-                    help="Rolling 7-day draft PO exposure as a share of the weekly procurement ceiling (saved settings).",
+                em1, _dv1, em2, _dv2, em3, _dv3, em4 = st.columns([1, 0.06, 1, 0.06, 1, 0.06, 1])
+                _divider = (
+                    '<div style="height:44px;margin:12px 0;border-left:1px solid #E2E8F0;"></div>'
                 )
-                em2.metric(
-                    "Inactive capital",
-                    f"${inactive_cap:,.2f}",
-                    help="Capital tied up in non-performing inventory (formerly reported as dead stock).",
-                )
-                em3.metric(
-                    "Inventory velocity",
-                    f"{turnover_x:.2f}x",
-                    help="Inventory turnover consistent with the Govnr engine brief.",
-                )
-                em4.metric(
-                    "Pending inter-warehouse transfers",
-                    f"{xfer_opportunity_count}",
-                    help="Distinct parts with transfer opportunity in the latest Report 4 manifest or metrics.",
-                )
+                with em1:
+                    st.metric(
+                        "Weekly procurement (vs. ceiling)",
+                        m1d,
+                        help="Rolling 7-day draft PO exposure as a share of the weekly procurement ceiling (saved settings).",
+                    )
+                with _dv1:
+                    st.markdown(_divider, unsafe_allow_html=True)
+                with em2:
+                    st.metric(
+                        "Inactive capital",
+                        f"${inactive_cap:,.2f}",
+                        help="Capital tied up in non-performing inventory (formerly reported as dead stock).",
+                    )
+                with _dv2:
+                    st.markdown(_divider, unsafe_allow_html=True)
+                with em3:
+                    st.metric(
+                        "Inventory velocity",
+                        f"{turnover_x:.2f}x",
+                        help="Inventory turnover consistent with the Govnr engine brief.",
+                    )
+                with _dv3:
+                    st.markdown(_divider, unsafe_allow_html=True)
+                with em4:
+                    st.metric(
+                        "Pending inter-warehouse transfers",
+                        f"{xfer_opportunity_count}",
+                        help="Distinct parts with transfer opportunity in the latest Report 4 manifest or metrics.",
+                    )
 
                 ch1, ch2, ch3 = st.columns(3)
                 cap_hi = (
@@ -1122,7 +1161,7 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                     number={
                         "prefix": "$",
                         "valueformat": ",.0f",
-                        "font": {"size": 22, "color": "#0f172a"},
+                        "font": {"size": 18, "color": "#1E293B"},
                     },
                     gauge={
                         "shape": "bullet",
@@ -1134,17 +1173,14 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                             "showticklabels": True,
                         },
                         "threshold": {
-                            "line": {"color": "#0a0a0a", "width": 2},
+                            "line": {"color": "#64748B", "width": 1},
                             "thickness": 0.85,
                             "value": ref_line if ref_line > 0 else cap_hi,
                         },
                         "bgcolor": "#e2e8f0",
                         "bar": {"color": "#1e3a5f"},
                     },
-                    title={
-                        "text": "Procurement vs. ceiling",
-                        "font": {"size": 14, "color": "#334155"},
-                    },
+                    title={"text": ""},
                 )
                 if ref_line > 0:
                     _ind_kw["delta"] = {
@@ -1155,16 +1191,15 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                     }
                 fig_bullet = go.Figure(go.Indicator(**_ind_kw))
                 fig_bullet.update_layout(
-                    height=240,
-                    margin=dict(l=28, r=28, t=56, b=28),
-                    paper_bgcolor=EXEC_DASH_BG,
-                    plot_bgcolor=EXEC_DASH_BG,
-                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                    height=144,
+                    margin=dict(l=16, r=16, t=28, b=16),
+                    paper_bgcolor=EXEC_CARD_BG,
+                    plot_bgcolor=EXEC_CARD_BG,
+                    font=dict(color="#64748B", family="Arial, 'Segoe UI', sans-serif"),
                     xaxis=dict(showgrid=False, zeroline=False, visible=False),
                     yaxis=dict(showgrid=False, zeroline=False, visible=False),
                 )
                 with ch1:
-                    st.caption("Procurement / ceiling — bullet view")
                     st.plotly_chart(
                         fig_bullet,
                         use_container_width=True,
@@ -1186,12 +1221,12 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                     ]
                 )
                 fig_dead.update_layout(
-                    height=240,
-                    margin=dict(l=20, r=20, t=36, b=20),
+                    height=144,
+                    margin=dict(l=12, r=12, t=20, b=12),
                     showlegend=False,
-                    paper_bgcolor=EXEC_DASH_BG,
-                    plot_bgcolor=EXEC_DASH_BG,
-                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                    paper_bgcolor=EXEC_CARD_BG,
+                    plot_bgcolor=EXEC_CARD_BG,
+                    font=dict(color="#64748B", family="Arial, 'Segoe UI', sans-serif"),
                 )
                 fig_dead.update_xaxes(
                     showgrid=False,
@@ -1206,7 +1241,6 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                     title_text=None,
                 )
                 with ch2:
-                    st.caption("Inactive capital — month-end trend")
                     st.plotly_chart(
                         fig_dead,
                         use_container_width=True,
@@ -1225,14 +1259,13 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                 fig_spark.update_xaxes(visible=False, showgrid=False, zeroline=False)
                 fig_spark.update_yaxes(visible=False, showgrid=False, zeroline=False)
                 fig_spark.update_layout(
-                    height=120,
-                    margin=dict(l=8, r=8, t=8, b=8),
-                    plot_bgcolor=EXEC_DASH_BG,
-                    paper_bgcolor=EXEC_DASH_BG,
-                    font=dict(color="#334155", family="Arial, 'Segoe UI', sans-serif"),
+                    height=72,
+                    margin=dict(l=4, r=4, t=4, b=4),
+                    plot_bgcolor=EXEC_CARD_BG,
+                    paper_bgcolor=EXEC_CARD_BG,
+                    font=dict(color="#64748B", family="Arial, 'Segoe UI', sans-serif"),
                 )
                 with ch3:
-                    st.caption("Inventory velocity — trend sparkline")
                     st.plotly_chart(
                         fig_spark,
                         use_container_width=True,
@@ -1384,8 +1417,8 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                         vendor = str(row.get("Purchase_Order_Vendor", "") or "—")
                         with st.container():
                             st.markdown(
-                                f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;'
-                                f'margin:0.75rem 0;background:#fafafa;">'
+                                f'<div style="border:none;border-radius:10px;padding:1rem 1.25rem;'
+                                f'margin:0.75rem 0;background:#F8FAFC;">'
                                 f"<b>{po_num}</b> &nbsp;|&nbsp; <b>${val:,.2f}</b> &nbsp;|&nbsp; {vendor}</div>",
                                 unsafe_allow_html=True,
                             )
@@ -1397,8 +1430,8 @@ div[data-testid="stVerticalBlock"]:has(p.exec-dash-section--audit) button {{
                         locs = str(xr.get("locations", ""))
                         tv = float(xr.get("transfer_value") or 0.0)
                         st.markdown(
-                            f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:1rem 1.25rem;'
-                            f'margin:0.75rem 0;background:#f8fafc;">'
+                            f'<div style="border:none;border-radius:10px;padding:1rem 1.25rem;'
+                            f'margin:0.75rem 0;background:#F8FAFC;">'
                             f"<b>Part {item}</b><br/>Locations: {locs}<br/><b>Transfer value:</b> ${tv:,.2f}</div>",
                             unsafe_allow_html=True,
                         )
