@@ -26,6 +26,68 @@ NETSUITE_DIR = os.path.join(BASE_DIR, "netsuite_core")
 if NETSUITE_DIR not in sys.path:
     sys.path.insert(0, NETSUITE_DIR)
 
+
+def _manual_stdout_path() -> str:
+    """Disk-backed manual execution log (never store large stdout in st.session_state)."""
+    return os.path.join(NETSUITE_DIR, "data", "outbound", "_last_manual_stdout.txt")
+
+
+def _persist_manual_stdout(text: str) -> None:
+    path = _manual_stdout_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text or "")
+    except OSError:
+        pass
+
+
+def _read_manual_stdout() -> str:
+    path = _manual_stdout_path()
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _latest_manual_run_metrics_from_db(client_uuid: str) -> dict:
+    """Fresh OTB row for Manual Execution UI — no metrics dict in session_state."""
+    rows = auth.get_client_metrics_history(client_uuid)
+    if not rows:
+        return {}
+    r = rows[0]
+    if not isinstance(r, dict):
+        return {}
+    wlim = float(r.get("weekly_otb_limit") or 0)
+    roll = float(r.get("rolling_po_exposure") or 0)
+    inter = float(r.get("intercepted_cash_total") or 0)
+    supp = float(r.get("suppressed_cash_total") or 0)
+    otb_breach = int(r.get("otb_breach_count") or 0)
+    xfer = int(r.get("transfer_imbalance_items") or 0)
+    return {
+        "weekly_otb_limit": wlim,
+        "rolling_po_total": roll,
+        "rolling_po_exposure": roll,
+        "intercepted_cash_total": inter,
+        "suppressed_cash_total": supp,
+        "is_exception_state": bool(otb_breach > 0 or inter > 0.0 or xfer > 0),
+    }
+
+
+def _upsert_manual_run_buffers(client_uuid: str, buffers: Optional[dict]) -> None:
+    """Persist pipeline artifacts to PostgreSQL (same path as engine); never stash bytes in session_state."""
+    for fname, payload in (buffers or {}).items():
+        if not fname or not isinstance(payload, (bytes, bytearray)):
+            continue
+        try:
+            auth.upsert_report_artifact(client_uuid, fname, bytes(payload))
+        except Exception:
+            pass
+
+
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 if "client_uuid" not in st.session_state:
@@ -57,7 +119,6 @@ def login_page():
                     st.session_state["client_uuid"] = str(result["client_uuid"])
                     st.session_state["company_name"] = result["company_name"]
                     st.session_state["account_tier"] = result.get("account_tier", "diagnostic")
-                    st.session_state["inventory_column_mapping"] = result.get("inventory_column_mapping") or {}
                     st.session_state["inbound_email_prefix"] = result.get("inbound_email_prefix", "client")
                     st.session_state["govnr_nav_module"] = "Executive Dashboard"
                     st.rerun()
@@ -634,15 +695,11 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
                 pl.read_csv(as_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
                 if os.path.exists(po_disk_path):
                     pl.read_csv(po_disk_path, infer_schema_length=10000, null_values=["", " ", "NA", "null"])
-                st.session_state["erp_mapping_files_ready"] = True
                 st.success("Files staged and validated. Configure mappings below, then save.")
             except Exception as e:
-                st.session_state["erp_mapping_files_ready"] = False
                 st.error(f"CSV validation failed: {e}")
 
-    files_ready = bool(st.session_state.get("erp_mapping_files_ready")) and os.path.isfile(inv_disk_path) and os.path.isfile(
-        as_disk_path
-    )
+    files_ready = os.path.isfile(inv_disk_path) and os.path.isfile(as_disk_path)
     if not files_ready:
         st.info("Stage inventory and annual_sold CSVs above to enable column mapping.")
         return
@@ -1479,8 +1536,16 @@ def _render_executive_dashboard():
 
 
 def main_dashboard():
-    # Binary buffers are never persisted in session state; keep this key clean across reruns.
-    st.session_state.pop("manual_exec_buffers", None)
+    # Drop legacy keys that caused white-screen serialization (DataFrames / bytes / huge strings).
+    for _legacy in (
+        "manual_exec_stdout",
+        "manual_exec_metrics",
+        "manual_exec_buffers",
+        "erp_mapping_files_ready",
+        "inventory_column_mapping",
+    ):
+        st.session_state.pop(_legacy, None)
+
     st.markdown(
         """
 <style>
@@ -1514,16 +1579,20 @@ section.main [data-testid="stCaption"] {
         st.session_state["authenticated"] = False
         st.session_state["client_uuid"] = None
         st.session_state["company_name"] = None
+        for _k in (
+            "manual_exec_success",
+            "manual_exec_save_error",
+            "manual_exec_metrics_saved",
+            "_govnr_nav_previous",
+        ):
+            st.session_state.pop(_k, None)
         st.rerun()
         
     st.sidebar.markdown("---")
     st.sidebar.title("Govnr Navigation")
     def _on_nav_module_change() -> None:
-        """Drop transient manual terminal output when leaving Manual Execution."""
+        """Track module switches (no session_state cleanup of large payloads)."""
         new = st.session_state.get("govnr_nav_module")
-        old = st.session_state.get("_govnr_nav_previous")
-        if old == "Manual Execution" and new != "Manual Execution":
-            st.session_state.pop("manual_exec_stdout", None)
         st.session_state["_govnr_nav_previous"] = new
 
     if "_govnr_nav_previous" not in st.session_state:
@@ -1606,15 +1675,14 @@ section.main [data-testid="stCaption"] {
                         company_name=st.session_state["company_name"],
                     )
 
-            st.session_state["manual_exec_stdout"] = report_buffer.getvalue()
+            _persist_manual_stdout(report_buffer.getvalue())
+            cu = st.session_state["client_uuid"]
 
             if result is None:
                 st.session_state["manual_exec_success"] = False
-                st.session_state.pop("manual_exec_metrics", None)
             else:
+                _upsert_manual_run_buffers(cu, result.get("buffers"))
                 st.session_state["manual_exec_success"] = True
-                st.session_state.pop("manual_exec_buffers", None)
-                st.session_state["manual_exec_metrics"] = result.get("metrics")
                 err = result.get("metrics_save_error")
                 if err:
                     st.session_state["manual_exec_save_error"] = err
@@ -1622,16 +1690,16 @@ section.main [data-testid="stCaption"] {
                 else:
                     st.session_state.pop("manual_exec_save_error", None)
                     st.session_state["manual_exec_metrics_saved"] = True
+            st.rerun()
 
-        # Persisted UI: survives reruns triggered by download buttons or other widgets.
-        stdout_text = st.session_state.get("manual_exec_stdout")
-        if stdout_text is not None:
+        stdout_text = _read_manual_stdout()
+        if stdout_text:
             st.subheader("Govnr terminal output")
             st.code(stdout_text, language="markdown")
 
         if st.session_state.get("manual_exec_success"):
             buffers = auth.get_latest_report_artifacts(st.session_state["client_uuid"])
-            metrics = st.session_state.get("manual_exec_metrics") or {}
+            metrics = _latest_manual_run_metrics_from_db(st.session_state["client_uuid"])
 
             if metrics:
                 st.subheader("Run summary (OTB)")
@@ -1725,7 +1793,7 @@ section.main [data-testid="stCaption"] {
             if not systemic_found:
                 st.caption("No systemic cleanup project reports were triggered in this run.")
 
-        elif st.session_state.get("manual_exec_success") is False and stdout_text is not None:
+        elif st.session_state.get("manual_exec_success") is False and stdout_text:
             st.error(
                 "Manual Execution halted. Ensure mandatory inbound files exist, mappings are saved, "
                 "and required columns are present (see terminal output for MissingFileError or SchemaDriftError)."
