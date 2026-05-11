@@ -1,0 +1,10 @@
+# Govnr — S&P / enterprise light baseline (Streamlit theme).
+# If this file is gitignored, adjust .streamlit/.gitignore to version it for your team.
+
+[theme]
+base = "light"
+primaryColor = "#004385" # S&P institutional blue
+backgroundColor = "#F8F9FA" # Very light slate/gray to reduce eye strain
+secondaryBackgroundColor = "#FFFFFF" # Pure white for cards/sidebars
+textColor = "#0F172A" # Crisp near-black for high legibility
+font = "sans serif" # Native system sans stack (zero webfont lag)
