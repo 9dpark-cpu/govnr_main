@@ -160,6 +160,10 @@ def _log_ingestion_run_row(client_uuid: str, file_name: str, file_hash: str, sta
 
 def onboarding_settings_page() -> None:
     """SFTP automation + CSV column mapping (single onboarding surface). CFO limits live on Executive Dashboard."""
+    # Manual Execution file_uploaders keep UploadedFile bytes in st.session_state (not in Postgres).
+    for _k in ("man_inv", "man_as", "man_po"):
+        st.session_state.pop(_k, None)
+
     st.title("Onboarding Settings")
     st.caption(
         "Configure automated file pickup (SFTP) and one-time CSV column mapping. "

@@ -19,6 +19,10 @@ from app_pages.manual_helpers import (
 
 
 def render_manual_execution_page() -> None:
+    # Onboarding mapping uploaders hold file buffers in session_state; drop when opening Manual Execution.
+    for _k in ("erp_fu_inv", "erp_fu_as", "erp_fu_po"):
+        st.session_state.pop(_k, None)
+
     st.title("Manual Execution")
     tier = st.session_state.get("account_tier", "diagnostic")
 

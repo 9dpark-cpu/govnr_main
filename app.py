@@ -129,7 +129,16 @@ section.main [data-testid="stCaption"] {
     st.sidebar.title("Govnr Navigation")
 
     def _on_nav_module_change() -> None:
+        """Clear file-uploader widget state when switching modules — UploadedFile lives only in
+        st.session_state (not PostgreSQL) and serializing multi‑MB buffers causes white-screen crashes."""
+        old = st.session_state.get("_govnr_nav_previous")
         new = st.session_state.get("govnr_nav_module")
+        if old == "Manual Execution" and new != "Manual Execution":
+            for _k in ("man_inv", "man_as", "man_po"):
+                st.session_state.pop(_k, None)
+        if old == "Onboarding Settings" and new != "Onboarding Settings":
+            for _k in ("erp_fu_inv", "erp_fu_as", "erp_fu_po"):
+                st.session_state.pop(_k, None)
         st.session_state["_govnr_nav_previous"] = new
 
     if "_govnr_nav_previous" not in st.session_state:
