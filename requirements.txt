@@ -9,4 +9,3 @@ toml==0.10.2
 protobuf<5.0.0
 paramiko==3.5.0
 plotly==5.20.0
-streamlit-shadcn-ui>=0.1.19

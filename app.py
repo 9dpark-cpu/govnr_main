@@ -12,7 +12,6 @@ import paramiko
 import auth
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit_shadcn_ui as shadcn_ui
 
 # 1. Defensively add your logic folder to Python's brain
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -800,19 +799,37 @@ def _render_column_mapping_tab(client_uuid: str) -> None:
 
 
 def _render_executive_dashboard():
-    """Enterprise SaaS layout: single column, spacing, typography tokens, shadcn alerts/accordion/cards."""
-    st.markdown(
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">',
-        unsafe_allow_html=True,
-    )
+    """Enterprise SaaS layout: single column, spacing, typography tokens; native Streamlit only."""
     st.markdown(
         """
 <style>
-  /* Executive Dashboard only: this block runs solely when this view is rendered. */
-  section.main .block-container { max-width: 42rem !important; margin-left: auto !important; margin-right: auto !important; }
+  /* Executive Dashboard — institutional typography (system stack, zero webfont latency). */
+  section.main .block-container {
+    max-width: 42rem !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    font-family: Helvetica, Arial, sans-serif !important;
+  }
   section.main .stMarkdown p, section.main label { color: #334155 !important; }
   section.main [data-testid="stCaption"] { color: #64748B !important; }
-  section.main h1 { font-size: 18px !important; font-weight: 700 !important; color: #0F172A !important; letter-spacing: -0.02em; }
+  section.main h1 {
+    font-family: Helvetica, Arial, sans-serif !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    color: #0F172A !important;
+    letter-spacing: -0.02em;
+  }
+  section.main h2, section.main h3 {
+    font-family: Helvetica, Arial, sans-serif !important;
+  }
+  section.main [data-testid="stMetricLabel"],
+  section.main [data-testid="stMetricLabel"] p,
+  section.main [data-testid="stMetricLabel"] div {
+    color: #64748B !important;
+    text-transform: uppercase !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.05em !important;
+  }
   .govnr-exec-mb { margin-bottom: 40px !important; }
   section.main [data-testid="stVerticalBlockBorderWrapper"] {
     margin-bottom: 40px !important;
@@ -824,11 +841,11 @@ def _render_executive_dashboard():
   }
   .govnr-exec-soft-info {
     background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px 28px;
-    color: #334155; font-family: Inter, system-ui, sans-serif; font-size: 14px; line-height: 1.55; margin-bottom: 40px;
+    color: #334155; font-family: Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.55; margin-bottom: 40px;
   }
   .govnr-exec-soft-ok {
     background: #ecfdf5; border: 1px solid #bbf7d0; border-radius: 12px; padding: 20px 24px;
-    color: #166534; font-family: Inter, system-ui, sans-serif; font-size: 14px; margin-bottom: 40px;
+    color: #166534; font-family: Helvetica, Arial, sans-serif; font-size: 14px; margin-bottom: 40px;
   }
 </style>
         """,
@@ -860,29 +877,37 @@ def _render_executive_dashboard():
             return f"{stem[:-4]} (CSV)"
         return base
 
-    def _kpi_cell(label: str, value: str, hint: str) -> str:
-        return (
-            "<div>"
-            f'<div style="font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:#64748B;">{label}</div>'
-            f'<div style="font-size:22px;font-weight:700;color:#0F172A;margin-top:10px;line-height:1.2;">{value}</div>'
-            f'<div style="font-size:12px;color:#64748B;margin-top:8px;line-height:1.4;">{hint}</div>'
-            "</div>"
-        )
+    def _usd_pulse(n: float) -> str:
+        n = float(n or 0.0)
+        ax = abs(n)
+        if ax >= 1_000_000:
+            return f"${n / 1_000_000:.2f}M"
+        if ax >= 1_000:
+            return f"${n / 1_000:,.0f}k".replace(",", "")
+        return f"${n:,.0f}"
 
-    def _kpi_strip(m1d: str, inactive: str, turnover: str, transfers: str) -> str:
-        return (
-            '<div class="govnr-exec-mb" style="font-family:Inter,system-ui,sans-serif;background:#ffffff;'
-            'border-radius:12px;padding:32px;box-shadow:0 1px 2px rgba(15,23,42,0.06);border:1px solid #e2e8f0;">'
-            '<div style="font-size:18px;font-weight:700;color:#0F172A;margin-bottom:6px;">Executive pulse</div>'
-            '<div style="font-size:14px;color:#334155;margin-bottom:28px;line-height:1.5;">'
-            "Rolling snapshot, KPIs, and trend visuals.</div>"
-            '<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));column-gap:40px;row-gap:28px;">'
-            + _kpi_cell("Weekly procurement vs ceiling", m1d, "Rolling 7-day draft PO vs saved ceiling.")
-            + _kpi_cell("Inactive capital", inactive, "Non-performing inventory capital.")
-            + _kpi_cell("Inventory velocity", turnover, "Turnover from latest snapshot.")
-            + _kpi_cell("Pending inter-warehouse transfers", transfers, "Report 4 or engine metrics.")
-            + "</div></div>"
-        )
+    def _partition_audit_artifacts(
+        artifacts: dict,
+    ) -> tuple[list[tuple[str, bytes]], list[tuple[str, bytes]], list[tuple[str, bytes]]]:
+        """Route vault files into 3-pillar locker: acute intercepts, Report_* ledger CSVs, executive PDFs."""
+        acute: list[tuple[str, bytes]] = []
+        systemic: list[tuple[str, bytes]] = []
+        brief: list[tuple[str, bytes]] = []
+        for fname, payload in sorted((artifacts or {}).items()):
+            if not isinstance(payload, (bytes, bytearray)):
+                continue
+            raw = bytes(payload)
+            low = fname.lower()
+            base = fname.rsplit("/", 1)[-1]
+            if low.endswith(".pdf") or "executive_brief" in low:
+                brief.append((fname, raw))
+            elif "action_intercept" in low:
+                acute.append((fname, raw))
+            elif low.endswith(".csv") and base.lower().startswith("report_"):
+                systemic.append((fname, raw))
+            elif low.endswith(".csv"):
+                systemic.append((fname, raw))
+        return acute, systemic, brief
 
     EXEC_CARD_BG = "#FFFFFF"
 
@@ -890,8 +915,8 @@ def _render_executive_dashboard():
         st.markdown("# Executive Dashboard")
         if st.session_state.pop("exec_governance_applied", False):
             st.markdown(
-                '<div class="govnr-exec-soft-ok">Governance thresholds saved. Pulse and the action queue use the '
-                "updated procurement ceiling.</div>",
+                '<div class="govnr-exec-soft-ok">Governance rules saved to <strong>client_ingestion_config</strong>. '
+                "Pulse and the action queue use the updated thresholds.</div>",
                 unsafe_allow_html=True,
             )
         st.caption("CFO view — procurement integrity, inactive capital, and inter-branch optimization.")
@@ -938,26 +963,14 @@ def _render_executive_dashboard():
         if not records:
             latest = None
             df_filtered = pd.DataFrame()
-            draft_po = 0.0
+            draft_po = float(draft_live) if draft_live is not None else 0.0
             weekly_ceiling = float(weekly_ceiling_resolved)
-            over_otb = False
             xfer_opportunity_count = xfer_n
             t_imb = 0
-            shadcn_ui.alert(
-                title="Optimization required",
-                description=(
-                    "Run Manual Execution (or your scheduled sync) to generate the first snapshot. "
-                    "Pulse metrics populate after the first successful engine run."
-                ),
-                class_name="mb-8 border-amber-200 bg-amber-50 text-amber-950",
-                key="exec_alert_no_history",
-            )
-            _gap()
-            st.markdown(
-                '<div class="govnr-exec-soft-info">No historical data found. Run <strong>Manual Execution</strong> '
-                "(or your scheduled sync) to generate the first snapshot.</div>",
-                unsafe_allow_html=True,
-            )
+            c_int = 0
+            inactive_cap = 0.0
+            turnover_x = 0.0
+            intercepted = 0.0
         else:
             numeric_cols = (
                 "total_capital_deployed",
@@ -996,63 +1009,162 @@ def _render_executive_dashboard():
                 pd.to_numeric(latest.get("rolling_po_exposure"), errors="coerce") or 0.0
             )
             weekly_ceiling = float(weekly_ceiling_resolved)
-            over_otb = weekly_ceiling > 0 and draft_po > weekly_ceiling
 
             t_imb = int(latest.get("transfer_imbalance_items") or 0)
             c_int = int(latest.get("cost_integrity_items") or 0)
             xfer_opportunity_count = max(xfer_n, t_imb)
 
-            if over_otb:
-                shadcn_ui.alert(
-                    title="Procurement limit breach",
-                    description=(
-                        f"Rolling 7-day draft exposure is ${draft_po:,.2f}, above the weekly procurement ceiling "
-                        f"of ${weekly_ceiling:,.2f}."
-                    ),
-                    class_name="mb-8 border-red-200 bg-red-50 text-red-950",
-                    key="exec_alert_breach",
-                )
-            elif xfer_opportunity_count > 0 or c_int > 0:
-                shadcn_ui.alert(
-                    title="Optimization required",
-                    description=(
-                        "Non-urgent flags (inter-warehouse transfers or integrity items). "
-                        "Review the action queue when convenient."
-                    ),
-                    class_name="mb-8 border-amber-200 bg-amber-50 text-amber-950",
-                    key="exec_alert_opt",
-                )
-            else:
-                shadcn_ui.alert(
-                    title="All systems nominal",
-                    description="No procurement limit breach. Latest snapshot is within the active ceiling.",
-                    class_name="mb-8 border-emerald-200 bg-emerald-50 text-emerald-950",
-                    key="exec_alert_nominal",
-                )
-
-            if weekly_ceiling > 0:
-                pct_use = draft_po / weekly_ceiling * 100.0
-                m1d = f"{pct_use:.1f}%"
-            else:
-                m1d = "—"
-
             inactive_cap = float(pd.to_numeric(latest.get("dead_stock_val"), errors="coerce") or 0.0)
             turnover_x = float(pd.to_numeric(latest.get("inventory_turnover"), errors="coerce") or 0.0)
+            intercepted = float(pd.to_numeric(latest.get("intercepted_cash_total"), errors="coerce") or 0.0)
 
-            st.markdown(
-                _kpi_strip(
-                    m1d,
-                    f"${inactive_cap:,.2f}",
-                    f"{turnover_x:.2f}x",
-                    str(xfer_opportunity_count),
-                ),
-                unsafe_allow_html=True,
+        cash_collision_risk = weekly_ceiling > 0 and draft_po > weekly_ceiling
+        over_otb = cash_collision_risk
+
+        # --- Level 1: Immediate alerts (status) ---
+        if cash_collision_risk:
+            st.error(
+                "🚨 CASH COLLISION DETECTED: Draft PO exposure exceeds the Weekly Procurement Ceiling."
             )
+        if not records:
+            st.warning(
+                "**Optimization required** — Run Manual Execution (or your scheduled sync) to generate the first "
+                "snapshot. Pulse metrics populate after the first successful engine run."
+            )
+        elif not cash_collision_risk:
+            if xfer_opportunity_count > 0 or c_int > 0:
+                st.warning(
+                    "**Optimization required** — Non-urgent flags (inter-warehouse transfers or integrity items). "
+                    "Review the action queue when convenient."
+                )
+            else:
+                st.success(
+                    "**All systems nominal** — No procurement limit breach. Latest snapshot is within the active ceiling."
+                )
 
+        _gap()
+
+        # --- Level 2: Executive metrics (pulse) ---
+        with st.container(border=True):
+            st.caption("Executive pulse — rolling 7-day draft exposure, capital at risk, and intercept posture.")
+            c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+            ceiling_delta = f"Ceiling: {_usd_pulse(weekly_ceiling)}" if weekly_ceiling > 0 else None
+            c_m1.metric("Weekly procurement", _usd_pulse(draft_po), delta=ceiling_delta)
+            c_m2.metric("Dead stock risk", _usd_pulse(inactive_cap))
+            c_m3.metric("Inv. turnover", f"{turnover_x:.2f}x")
+            c_m4.metric("Capital intercepted", _usd_pulse(intercepted))
+
+        _gap()
+
+        # --- Level 3: Governance & limits (control knobs) ---
+        with st.expander("⚙️ Procurement Governance & Alert Thresholds", expanded=False):
+            st.caption(
+                "Values persist in PostgreSQL **client_ingestion_config** and apply on the next engine run. "
+                "Saving refreshes procurement math on this screen."
+            )
+            with st.form("cfo_limits_form"):
+                gov_ceiling = st.number_input(
+                    "Weekly Procurement Ceiling ($) (formerly Weekly OTB limit)",
+                    min_value=0.0,
+                    step=1000.0,
+                    value=float(_w_show),
+                    help="Rolling 7-day draft PO ceiling.",
+                    key="cfo_weekly_procurement_ceiling",
+                )
+                gov_min_xfer = st.number_input(
+                    "Inter-Warehouse Liquidity Threshold ($) (formerly Min transfer value)",
+                    min_value=0.0,
+                    step=100.0,
+                    value=float(_m_show),
+                    help="Minimum economic size for inter-warehouse liquidity moves.",
+                    key="cfo_inter_wh_liquidity_threshold",
+                )
+                gov_stagnant = st.number_input(
+                    "Stagnant Procurement Threshold ($) (formerly Toxic PO materiality)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=float(toxic_raw),
+                    help="Materiality floor for stagnant / dead-stock procurement intercepts.",
+                    key="cfo_stagnant_procurement_threshold",
+                )
+                gov_super = st.checkbox(
+                    "Enforce supersession blocks",
+                    value=bool(super_raw),
+                    help="Block new part POs when superseded legacy stock is available.",
+                    key="cfo_enforce_supersession",
+                )
+                submitted_cfo = st.form_submit_button("Update Governance Rules", type="primary")
+        if submitted_cfo:
+            auth.upsert_client_ingestion_erp_settings(
+                client_uuid_dash,
+                float(gov_ceiling),
+                float(gov_min_xfer),
+                float(gov_stagnant),
+                bool(gov_super),
+            )
+            st.session_state["exec_governance_applied"] = True
+            st.rerun()
+
+        _gap()
+
+        # --- 3-Pillar Audit Locker (native downloads; below governance) ---
+        st.subheader("Audit locker")
+        st.caption("Latest engine artifacts from PostgreSQL — acute intercepts, ledger audits, and executive briefing.")
+        if not db_artifacts:
+            st.info("No artifacts in PostgreSQL yet. Run **Manual Execution** (or scheduled ingestion) to populate the locker.")
+
+        _acute_art, _systemic_art, _brief_art = _partition_audit_artifacts(db_artifacts)
+        c_aud1, c_aud2, c_aud3 = st.columns(3)
+        with c_aud1:
+            st.markdown("### 🔴 Alert Intercepts (Acute Action required).")
+            if not _acute_art:
+                st.caption("No acute intercept exports in vault.")
+            for i, (fname, payload) in enumerate(_acute_art):
+                st.download_button(
+                    label=f"Download {_exec_tile_label(fname)}",
+                    data=payload,
+                    file_name=fname,
+                    mime="text/csv" if fname.lower().endswith(".csv") else "application/octet-stream",
+                    key=f"audit_p3_acute_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:10]}",
+                    use_container_width=True,
+                    type="primary",
+                )
+        with c_aud2:
+            st.markdown("### 🛠️ Systemic Cleanup (Ledger Audits).")
+            if not _systemic_art:
+                st.caption("No systemic ledger audit CSVs in vault.")
+            for i, (fname, payload) in enumerate(_systemic_art):
+                st.download_button(
+                    label=f"Download {_exec_tile_label(fname)}",
+                    data=payload,
+                    file_name=fname,
+                    mime="text/csv",
+                    key=f"audit_p3_sys_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:10]}",
+                    use_container_width=True,
+                    type="secondary",
+                )
+        with c_aud3:
+            st.markdown("### 📅 Executive Brief (Monthly PDF).")
+            if not _brief_art:
+                st.caption("No executive briefing PDF in vault.")
+            for i, (fname, payload) in enumerate(_brief_art):
+                st.download_button(
+                    label=f"Download {_exec_tile_label(fname)}",
+                    data=payload,
+                    file_name=fname,
+                    mime="application/pdf" if fname.lower().endswith(".pdf") else "application/octet-stream",
+                    key=f"audit_p3_brf_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:10]}",
+                    use_container_width=True,
+                    type="primary",
+                )
+
+        _gap()
+
+        if records:
             with st.container(border=True):
                 st.markdown(
                     '<div style="font-size:18px;font-weight:700;color:#0F172A;margin-bottom:20px;'
-                    'font-family:Inter,system-ui,sans-serif;">Trends</div>',
+                    'font-family:Helvetica,Arial,sans-serif;">Trends</div>',
                     unsafe_allow_html=True,
                 )
                 cap_hi = (
@@ -1101,7 +1213,7 @@ def _render_executive_dashboard():
                     margin=dict(l=16, r=16, t=24, b=16),
                     paper_bgcolor=EXEC_CARD_BG,
                     plot_bgcolor=EXEC_CARD_BG,
-                    font=dict(color="#64748B", family="Inter, Arial, sans-serif"),
+                    font=dict(color="#64748B", family="Helvetica, Arial, sans-serif"),
                     xaxis=dict(showgrid=False, zeroline=False, visible=False),
                     yaxis=dict(showgrid=False, zeroline=False, visible=False),
                 )
@@ -1128,7 +1240,7 @@ def _render_executive_dashboard():
                     showlegend=False,
                     paper_bgcolor=EXEC_CARD_BG,
                     plot_bgcolor=EXEC_CARD_BG,
-                    font=dict(color="#64748B", family="Inter, Arial, sans-serif"),
+                    font=dict(color="#64748B", family="Helvetica, Arial, sans-serif"),
                 )
                 fig_dead.update_xaxes(showgrid=False, zeroline=False, tickfont=dict(size=11, color="#64748b"))
                 fig_dead.update_yaxes(
@@ -1157,73 +1269,15 @@ def _render_executive_dashboard():
                     margin=dict(l=8, r=8, t=8, b=8),
                     plot_bgcolor=EXEC_CARD_BG,
                     paper_bgcolor=EXEC_CARD_BG,
-                    font=dict(color="#64748B", family="Inter, Arial, sans-serif"),
+                    font=dict(color="#64748B", family="Helvetica, Arial, sans-serif"),
                 )
                 st.plotly_chart(fig_spark, use_container_width=True, config={"displayModeBar": False})
-
-        _gap()
-        shadcn_ui.card(
-            title="Governance",
-            description="Procurement ceiling, transfer floor, stagnant PO threshold, supersession.",
-            content=" ",
-            key="exec_card_gov_hdr",
-        ).render()
-        _gap()
-        shadcn_ui.accordion(
-            data=[
-                {
-                    "trigger": "About these controls",
-                    "content": (
-                        "Values persist in PostgreSQL and apply to the next engine run. "
-                        "Apply Changes refreshes procurement math on this page immediately."
-                    ),
-                }
-            ],
-            class_name="mb-8",
-            key="exec_acc_gov_intro",
-        )
-        with st.form("governance_alert_thresholds"):
-            gov_ceiling = st.number_input(
-                "Weekly procurement ceiling ($)",
-                min_value=0.0,
-                step=1000.0,
-                value=float(_w_show),
-                help="Rolling 7-day draft PO limit (formerly weekly OTB).",
-                key="gov_weekly_procurement_ceiling",
+        else:
+            st.markdown(
+                '<div class="govnr-exec-soft-info">No historical ledger rows yet. Run <strong>Manual Execution</strong> '
+                "(or your scheduled sync) to populate trend charts.</div>",
+                unsafe_allow_html=True,
             )
-            gov_min_xfer = st.number_input(
-                "Minimum transfer threshold ($)",
-                min_value=0.0,
-                step=100.0,
-                value=float(_m_show),
-                help="Value floor for inter-warehouse movement alerts.",
-                key="gov_min_transfer_threshold",
-            )
-            gov_stagnant = st.number_input(
-                "Stagnant procurement threshold ($)",
-                min_value=0.0,
-                step=50.0,
-                value=float(toxic_raw),
-                help="Materiality floor for stagnant / dead-stock PO intercepts (formerly toxic PO).",
-                key="gov_stagnant_procurement_threshold",
-            )
-            gov_super = st.checkbox(
-                "Enforce supersession blocks",
-                value=bool(super_raw),
-                help="Block new part POs when superseded legacy stock is available.",
-                key="gov_enforce_supersession",
-            )
-            submitted_gov = st.form_submit_button("Apply changes", type="primary")
-        if submitted_gov:
-            auth.upsert_client_ingestion_erp_settings(
-                client_uuid_dash,
-                float(gov_ceiling),
-                float(gov_min_xfer),
-                float(gov_stagnant),
-                bool(gov_super),
-            )
-            st.session_state["exec_governance_applied"] = True
-            st.rerun()
 
         _gap()
         po_breakdown_open = bool(st.session_state.get("exec_open_po_breakdown")) or (
@@ -1266,31 +1320,18 @@ def _render_executive_dashboard():
 
         queue_empty = not show_po_cards and xfer_cards_df.empty
 
-        shadcn_ui.card(
-            title="Immediate action queue",
-            description="Decision-ready items only; threshold-filtered noise reduction.",
-            content=" ",
-            key="exec_card_action_hdr",
-        ).render()
+        st.subheader("Immediate action queue")
+        st.caption("Decision-ready items only; threshold-filtered noise reduction.")
         _gap()
 
         if over_otb and queue_empty:
-            shadcn_ui.alert(
-                title="Limited PO detail",
-                description=(
-                    "Procurement limit breach is active on rolling exposure, but there are no PO rows or "
-                    "transfer lines to show. Stage po_activity.csv and refresh, or run the engine to repopulate artifacts."
-                ),
-                class_name="mb-8 border-red-200 bg-red-50 text-red-950",
-                key="exec_alert_queue_warn",
+            st.error(
+                "**Limited PO detail** — Procurement limit breach is active on rolling exposure, but there are no "
+                "PO rows or transfer lines to show. Stage **po_activity.csv** and refresh, or run the engine to "
+                "repopulate artifacts."
             )
         elif queue_empty:
-            shadcn_ui.alert(
-                title="Procurement strategy optimized",
-                description="No action required.",
-                class_name="mb-8 border-emerald-200 bg-emerald-50 text-emerald-950",
-                key="exec_alert_queue_ok",
-            )
+            st.success("**Procurement strategy optimized** — No action required.")
         else:
             if show_po_cards:
                 st.markdown(
@@ -1327,12 +1368,8 @@ def _render_executive_dashboard():
                     po_num = str(row.get("PO_Number", ""))
                     val = float(row.get("Order_Total_Amount") or 0.0)
                     vendor = str(row.get("Purchase_Order_Vendor", "") or "—")
-                    shadcn_ui.metric_card(
-                        title=po_num,
-                        content=f"${val:,.2f}",
-                        description=vendor,
-                        key=f"exec_po_row_{_idx}_{hashlib.sha256(po_num.encode()).hexdigest()[:10]}",
-                    )
+                    po_label = po_num if po_num else f"PO row {_idx + 1}"
+                    st.metric(label=po_label, value=f"${val:,.2f}", help=vendor)
                     _gap()
 
             if not xfer_cards_df.empty:
@@ -1345,83 +1382,11 @@ def _render_executive_dashboard():
                     item = str(xr.get("Item_Identifier", ""))
                     locs = str(xr.get("locations", ""))
                     tv = float(xr.get("transfer_value") or 0.0)
-                    shadcn_ui.metric_card(
-                        title=f"Part {item}",
-                        content=f"${tv:,.2f}",
-                        description=f"Locations: {locs}",
-                        key=f"exec_xfer_{j}_{hashlib.sha256(item.encode()).hexdigest()[:10]}",
-                    )
+                    xfer_label = f"Part {item}" if item else f"Transfer line {j}"
+                    st.metric(label=xfer_label, value=f"${tv:,.2f}", help=f"Locations: {locs}")
                     _gap()
 
         _gap()
-        shadcn_ui.card(
-            title="Audit locker",
-            description="Operational CSVs and executive PDFs from the latest engine run.",
-            content=" ",
-            key="exec_card_audit_hdr",
-        ).render()
-        _gap()
-        with st.expander("Systemic audit — evidence locker", expanded=False):
-            st.caption("Daily operational logs (CSV) and executive briefings (PDF) from the latest engine run.")
-            if not db_artifacts:
-                st.markdown(
-                    '<div class="govnr-exec-soft-info">No artifacts in PostgreSQL yet. Run the engine to populate files.</div>',
-                    unsafe_allow_html=True,
-                )
-
-            pdf_items = []
-            csv_items = []
-            for fname, payload in sorted((db_artifacts or {}).items()):
-                low = fname.lower()
-                if low.endswith(".pdf") or "executive_brief" in low:
-                    pdf_items.append((fname, payload))
-                elif low.endswith(".csv"):
-                    csv_items.append((fname, payload))
-
-            if pdf_items:
-                st.markdown(
-                    '<div style="font-size:18px;font-weight:700;color:#0F172A;margin:16px 0 12px 0;">'
-                    "Executive briefings</div>",
-                    unsafe_allow_html=True,
-                )
-                for i, (fname, payload) in enumerate(pdf_items):
-                    st.markdown(
-                        f'<div style="color:#334155;font-weight:600;margin:12px 0 8px 0;">{_exec_tile_label(fname)}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.download_button(
-                        label="Download",
-                        data=payload,
-                        file_name=fname,
-                        mime="application/pdf" if fname.lower().endswith(".pdf") else "application/octet-stream",
-                        key=f"audit_pdf_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
-                        use_container_width=True,
-                        type="primary",
-                    )
-                    _gap()
-
-            if csv_items:
-                st.markdown(
-                    '<div style="font-size:18px;font-weight:700;color:#0F172A;margin:16px 0 12px 0;">'
-                    "Daily operational logs</div>",
-                    unsafe_allow_html=True,
-                )
-                for i, (fname, payload) in enumerate(csv_items):
-                    st.markdown(
-                        f'<div style="color:#334155;font-weight:600;margin:12px 0 8px 0;">{_exec_tile_label(fname)}</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.download_button(
-                        label="Download",
-                        data=payload,
-                        file_name=fname,
-                        mime="text/csv",
-                        key=f"audit_csv_{i}_{hashlib.sha256(fname.encode()).hexdigest()[:12]}",
-                        use_container_width=True,
-                        type="secondary",
-                    )
-                    _gap()
-
         with st.expander("Diagnostics & historical ledger", expanded=False):
             st.caption("Integrity audit exports and raw metric history for engineering review.")
             if records:
